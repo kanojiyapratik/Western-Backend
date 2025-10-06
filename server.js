@@ -9,6 +9,7 @@ const path = require("path");
 const fs = require("fs");
 const ActivityLog = require("./models/ActivityLog");
 require("dotenv").config();
+const { sendEmbedEmail } = require("./utils/mailer");
 
 const app = express();
 
@@ -1511,6 +1512,63 @@ app.post("/api/admin/models", authMiddleware, requireAdmin, async (req, res) => 
     console.log('Model metadata:', newModel.metadata);
     console.log('==================');
 
+    // Send embed emails to all users
+    try {
+      const EmbedToken = require('./models/EmbedToken');
+      const User = require('./models/User');
+
+      // Get all users
+      const users = await User.find({}).select('email name');
+      console.log(`📧 Found ${users.length} users to notify`);
+
+      if (users.length > 0) {
+        // Generate per-user embed tokens
+        const tokensToInsert = users.map(user => ({
+          userId: user._id,
+          modelId: newModel._id,
+          token: require('crypto').randomBytes(16).toString('hex'),
+          active: true
+        }));
+
+        const inserted = await EmbedToken.insertMany(tokensToInsert);
+        const host = process.env.FRONTEND_HOST || 'http://localhost:5173';
+        const embedUrls = inserted.map(doc => ({ userId: doc.userId, url: `${host}/embed?token=${doc.token}` }));
+
+        // Send email to each user
+        for (let i = 0; i < users.length; i++) {
+          const user = users[i];
+          const embedUrl = embedUrls.find(e => e.userId.toString() === user._id.toString())?.url;
+
+          if (embedUrl) {
+            const subject = `New 3D Model Available: ${newModel.name}`;
+            const html = `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #333;">New 3D Model Available!</h2>
+                <p>Hello ${user.name || 'User'},</p>
+                <p>A new 3D model has been added to our configurator: <strong>${newModel.name}</strong></p>
+                <p>You can view and interact with this model by clicking the link below:</p>
+                <p style="text-align: center; margin: 30px 0;">
+                  <a href="${embedUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View 3D Model</a>
+                </p>
+                <p>The link will remain active for you to access this model anytime.</p>
+                <p>Best regards,<br>The 3D Configurator Team</p>
+              </div>
+            `;
+
+            const emailResult = await sendEmbedEmail(user.email, subject, html, embedUrl);
+            if (emailResult.success) {
+              console.log(`✅ Email sent to ${user.email}`);
+            } else {
+              console.error(`❌ Failed to send email to ${user.email}:`, emailResult.error);
+            }
+          }
+        }
+      }
+    } catch (emailError) {
+      console.error('❌ Error sending embed emails:', emailError);
+      // Don't fail the model save if email sending fails
+    }
+
     res.status(201).json({
       message: "Model saved successfully",
       model: newModel
@@ -1923,6 +1981,57 @@ app.delete("/api/configs/:id", authMiddleware, async (req, res) => {
 
 // Serve configuration texture files
 app.use('/config-textures', express.static(path.join(__dirname, '../Frontend/public/config-textures')));
+
+// Resolve embed token to model metadata (public endpoint)
+app.get('/api/embed/resolve', async (req, res) => {
+  try {
+    const { token } = req.query;
+    if (!token) return res.status(400).json({ message: 'token required' });
+    const EmbedToken = require('./models/EmbedToken');
+    const doc = await EmbedToken.findOne({ token, active: true }).populate('modelId');
+    if (!doc || !doc.modelId) return res.status(404).json({ message: 'Invalid or expired token' });
+    const model = doc.modelId;
+    const payload = {
+      id: model._id,
+      name: model.name,
+      displayName: model.displayName,
+      file: model.file && (model.file.startsWith('http') || model.file.startsWith('https://')) ? model.file : `http://192.168.1.7:5000/models/${model.file}`,
+      configUrl: model.configUrl ? (model.configUrl.startsWith('http') ? model.configUrl : `http://192.168.1.7:5000${model.configUrl}`) : undefined,
+      assets: model.assets || {},
+      metadata: model.metadata || {},
+      readOnly: true
+    };
+    return res.json({ success: true, model: payload });
+  } catch (error) {
+    console.error('Embed resolve error:', error);
+    return res.status(500).json({ message: 'Internal error', error: error.message });
+  }
+});
+
+// Admin: list embed tokens for a model
+app.get('/api/admin/models/:id/embed-tokens', authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const modelId = req.params.id;
+    const EmbedToken = require('./models/EmbedToken');
+    const tokens = await EmbedToken.find({ modelId }).populate('userId', 'email name');
+    const host = process.env.FRONTEND_HOST || 'http://localhost:5173';
+    const out = tokens.map(t => ({ token: t.token, user: t.userId, active: t.active, url: `${host}/embed?token=${t.token}`, createdAt: t.createdAt }));
+    res.json(out);
+  } catch (error) {
+    console.error('Error fetching embed tokens:', error);
+    res.status(500).json({ message: 'Error fetching embed tokens', error: error.message });
+  }
+});
+
+// Dev-only mailer status endpoint (unauthenticated) — only enabled when not in production
+app.get('/api/debug/mailer-status', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ ok: false, message: 'Not allowed in production' });
+  }
+  const { getMailerStatus } = require('./utils/mailer');
+  const status = typeof getMailerStatus === 'function' ? getMailerStatus() : null;
+  return res.json({ ok: true, status });
+});
 
 // Start server on network IP
 const PORT = process.env.PORT || 5000;
