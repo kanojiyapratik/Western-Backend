@@ -74,7 +74,7 @@ const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  role: { type: String, default: "user", enum: ["admin", "user"] },
+  role: { type: String, default: "user", enum: ["admin", "user", "superadmin"] },
   permissions: {
     doorPresets: { type: Boolean, default: false },
     doorToggles: { type: Boolean, default: false },
@@ -486,6 +486,15 @@ const ensureDefaultAccounts = async () => {
       password: "user123",
       permissions: fullPermissions
     });
+
+    // Default Super Admin
+    await ensureAccount({
+      email: "id-pratik",
+      name: "Super Admin",
+      role: "superadmin",
+      password: "1234",
+      permissions: fullPermissions
+    });
   } catch (error) {
     console.error("❌ Error ensuring default accounts:", error.message);
   }
@@ -675,8 +684,8 @@ app.get("/api/admin-dashboard/users", authMiddleware, async (req, res) => {
     if (req.user.role !== "admin") {
       return res.status(403).json({ message: "Access denied" });
     }
-
-    const users = await User.find({}, { password: 0 }).sort({ createdAt: -1 });
+    // Admins must not see superadmin accounts
+    const users = await User.find({ role: { $ne: 'superadmin' } }, { password: 0 }).sort({ createdAt: -1 });
     
     // Ensure all users have complete permissions structure
     const defaultPermissions = {
@@ -710,8 +719,12 @@ app.put("/api/admin-dashboard/users/:id/permissions", authMiddleware, async (req
     if (req.user.role !== "admin") {
       return res.status(403).json({ message: "Access denied" });
     }
-
     const { permissions } = req.body;
+
+    // Disallow modifying superadmin
+    const target = await User.findById(req.params.id).select('role');
+    if (!target) return res.status(404).json({ message: "User not found" });
+    if (target.role === 'superadmin') return res.status(403).json({ message: 'Not allowed for superadmin' });
     
     // Ensure complete permissions structure
     const defaultPermissions = {
@@ -763,6 +776,10 @@ app.patch("/api/admin-dashboard/users/:id/toggle-active", authMiddleware, async 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
+    // Disallow acting on superadmin
+    if (user.role === 'superadmin') {
+      return res.status(403).json({ message: 'Not allowed for superadmin' });
+    }
     
     // Don't allow deactivating yourself
     if (user._id.toString() === req.user._id.toString()) {
@@ -799,6 +816,9 @@ app.delete("/api/admin-dashboard/users/:id", authMiddleware, async (req, res) =>
     const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
+    }
+    if (user.role === 'superadmin') {
+      return res.status(403).json({ message: 'Not allowed for superadmin' });
     }
     
     // Don't allow deleting yourself
@@ -1185,7 +1205,7 @@ app.get("/api/models", async (req, res) => {
 
 // Admin only routes
 const requireAdmin = (req, res, next) => {
-  if (!req.user || req.user.role !== 'admin') {
+  if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'superadmin')) {
     return res.status(403).json({ message: 'Admin access required' });
   }
   next();
@@ -2282,7 +2302,9 @@ app.post('/api/admin-dashboard/users', authMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ message: 'Access denied' });
 
-    const { name, email, password, role = 'user', permissions = {} } = req.body;
+    let { name, email, password, role = 'user', permissions = {} } = req.body;
+    // Admins cannot create superadmin accounts
+    if (role === 'superadmin') role = 'admin';
     if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required' });
 
     const existing = await User.findOne({ email: email.toLowerCase().trim() });
