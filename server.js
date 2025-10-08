@@ -74,7 +74,7 @@ const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  role: { type: String, default: "user", enum: ["admin", "user", "superadmin"] },
+  role: { type: String, default: "user", enum: ["admin", "user"] },
   permissions: {
     doorPresets: { type: Boolean, default: false },
     doorToggles: { type: Boolean, default: false },
@@ -83,6 +83,13 @@ const UserSchema = new mongoose.Schema({
     lightWidget: { type: Boolean, default: false },
     globalTextureWidget: { type: Boolean, default: false },
     screenshotWidget: { type: Boolean, default: false },
+  // Model management permissions
+  // Legacy master switch (kept): when true, implies full model management
+  modelUpload: { type: Boolean, default: false },
+  // New granular switches
+  modelManageUpload: { type: Boolean, default: false },
+  modelManageEdit: { type: Boolean, default: false },
+  modelManageDelete: { type: Boolean, default: false },
     // Add missing widget permissions
   // Removed reflectionWidget, movementWidget, customWidget
     saveConfig: { type: Boolean, default: false },
@@ -462,6 +469,7 @@ const ensureDefaultAccounts = async () => {
       lightWidget: true,
       globalTextureWidget: true,
       screenshotWidget: true,
+      modelUpload: true,
       // Add missing widget permissions
   // Removed reflectionWidget, movementWidget, customWidget
       saveConfig: true,
@@ -484,15 +492,6 @@ const ensureDefaultAccounts = async () => {
       name: "Demo User",
       role: "user",
       password: "user123",
-      permissions: fullPermissions
-    });
-
-    // Default Super Admin
-    await ensureAccount({
-      email: "id-pratik",
-      name: "Super Admin",
-      role: "superadmin",
-      password: "1234",
       permissions: fullPermissions
     });
   } catch (error) {
@@ -684,8 +683,8 @@ app.get("/api/admin-dashboard/users", authMiddleware, async (req, res) => {
     if (req.user.role !== "admin") {
       return res.status(403).json({ message: "Access denied" });
     }
-    // Admins must not see superadmin accounts
-    const users = await User.find({ role: { $ne: 'superadmin' } }, { password: 0 }).sort({ createdAt: -1 });
+
+    const users = await User.find({}, { password: 0 }).sort({ createdAt: -1 });
     
     // Ensure all users have complete permissions structure
     const defaultPermissions = {
@@ -695,6 +694,7 @@ app.get("/api/admin-dashboard/users", authMiddleware, async (req, res) => {
       textureWidget: false,
       lightWidget: false,
       globalTextureWidget: false,
+      modelUpload: false,
       saveConfig: false,
       canRotate: true,
       canPan: false,
@@ -719,12 +719,8 @@ app.put("/api/admin-dashboard/users/:id/permissions", authMiddleware, async (req
     if (req.user.role !== "admin") {
       return res.status(403).json({ message: "Access denied" });
     }
-    const { permissions } = req.body;
 
-    // Disallow modifying superadmin
-    const target = await User.findById(req.params.id).select('role');
-    if (!target) return res.status(404).json({ message: "User not found" });
-    if (target.role === 'superadmin') return res.status(403).json({ message: 'Not allowed for superadmin' });
+    const { permissions } = req.body;
     
     // Ensure complete permissions structure
     const defaultPermissions = {
@@ -734,6 +730,7 @@ app.put("/api/admin-dashboard/users/:id/permissions", authMiddleware, async (req
       textureWidget: false,
       lightWidget: false,
       globalTextureWidget: false,
+      modelUpload: false,
       saveConfig: false,
       canRotate: true,
       canPan: false,
@@ -776,10 +773,6 @@ app.patch("/api/admin-dashboard/users/:id/toggle-active", authMiddleware, async 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
-    // Disallow acting on superadmin
-    if (user.role === 'superadmin') {
-      return res.status(403).json({ message: 'Not allowed for superadmin' });
-    }
     
     // Don't allow deactivating yourself
     if (user._id.toString() === req.user._id.toString()) {
@@ -816,9 +809,6 @@ app.delete("/api/admin-dashboard/users/:id", authMiddleware, async (req, res) =>
     const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
-    }
-    if (user.role === 'superadmin') {
-      return res.status(403).json({ message: 'Not allowed for superadmin' });
     }
     
     // Don't allow deleting yourself
@@ -1205,14 +1195,49 @@ app.get("/api/models", async (req, res) => {
 
 // Admin only routes
 const requireAdmin = (req, res, next) => {
-  if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'superadmin')) {
+  if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({ message: 'Admin access required' });
   }
   next();
 };
 
+// Allow model management (list/view) if admin OR any model-management permission
+const requireModelManager = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+  if (req.user.role === 'admin') return next();
+  const p = req.user.permissions || {};
+  if (p.modelUpload || p.modelManageUpload || p.modelManageEdit || p.modelManageDelete) return next();
+  return res.status(403).json({ message: 'Model management permission required' });
+};
+
+// Action-specific permissions (legacy modelUpload implies all)
+const requireModelUploadPerm = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+  if (req.user.role === 'admin') return next();
+  const p = req.user.permissions || {};
+  // Only granular flag allows upload; master enables view-only
+  if (p.modelManageUpload) return next();
+  return res.status(403).json({ message: 'Upload permission required' });
+};
+
+const requireModelEditPerm = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+  if (req.user.role === 'admin') return next();
+  const p = req.user.permissions || {};
+  if (p.modelManageEdit) return next();
+  return res.status(403).json({ message: 'Edit permission required' });
+};
+
+const requireModelDeletePerm = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+  if (req.user.role === 'admin') return next();
+  const p = req.user.permissions || {};
+  if (p.modelManageDelete) return next();
+  return res.status(403).json({ message: 'Delete permission required' });
+};
+
 // Get all models
-app.get("/api/admin/models", authMiddleware, requireAdmin, async (req, res) => {
+app.get("/api/admin/models", authMiddleware, requireModelManager, async (req, res) => {
   try {
     console.log('Admin /api/admin/models requested by user:', req.user?._id, req.user?.email, 'role=', req.user?.role);
     // Use lean() to return plain objects and avoid potential populate/schema mismatches
@@ -1231,7 +1256,7 @@ app.get("/api/admin/models", authMiddleware, requireAdmin, async (req, res) => {
 
 // Upload new model
 // Multi-file upload: expects fields like base, doors, drawers, etc.
-app.post("/api/admin/models/upload", authMiddleware, requireAdmin, upload.fields([
+app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upload.fields([
   { name: 'base', maxCount: 1 },
   { name: 'doors', maxCount: 1 },
   { name: 'drawers', maxCount: 1 },
@@ -1398,7 +1423,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireAdmin, upload.fields
 });
 
 // Simple file upload endpoint (just uploads file, no model creation)
-app.post("/api/upload", authMiddleware, requireAdmin, upload.single('file'), async (req, res) => {
+app.post("/api/upload", authMiddleware, requireModelUploadPerm, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
@@ -1425,7 +1450,7 @@ app.post("/api/upload", authMiddleware, requireAdmin, upload.single('file'), asy
 });
 
 // Upload texture file
-app.post("/api/admin/textures/upload", authMiddleware, requireAdmin, uploadTexture.single('textureFile'), async (req, res) => {
+app.post("/api/admin/textures/upload", authMiddleware, requireModelUploadPerm, uploadTexture.single('textureFile'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
@@ -1483,7 +1508,7 @@ app.post("/api/upload-texture", authMiddleware, uploadTexture.single('texture'),
 });
 
 // Save model configuration (when file is already uploaded)
-app.post("/api/admin/models", authMiddleware, requireAdmin, async (req, res) => {
+app.post("/api/admin/models", authMiddleware, requireModelUploadPerm, async (req, res) => {
   try {
     console.log('Incoming model POST body:', req.body);
     // Avoid shadowing the Node `path` module by renaming the incoming body field
@@ -1600,7 +1625,7 @@ app.post("/api/admin/models", authMiddleware, requireAdmin, async (req, res) => 
 });
 
 // Update model
-app.put("/api/admin/models/:id", authMiddleware, requireAdmin, async (req, res) => {
+app.put("/api/admin/models/:id", authMiddleware, requireModelEditPerm, async (req, res) => {
   try {
     const { id } = req.params;
   const { name, displayName, type, status, file, path: filePath, configUrl, assets, section } = req.body;
@@ -1648,7 +1673,7 @@ app.put("/api/admin/models/:id", authMiddleware, requireAdmin, async (req, res) 
 });
 
 // Delete model
-app.delete("/api/admin/models/:id", authMiddleware, requireAdmin, async (req, res) => {
+app.delete("/api/admin/models/:id", authMiddleware, requireModelDeletePerm, async (req, res) => {
   try {
     const { id } = req.params;
     console.log('=== DELETE MODEL DEBUG ===');
@@ -1676,7 +1701,7 @@ app.delete("/api/admin/models/:id", authMiddleware, requireAdmin, async (req, re
 });
 
 // Preview deletion (non-destructive)
-app.get("/api/admin/models/:id/delete-preview", authMiddleware, requireAdmin, async (req, res) => {
+app.get("/api/admin/models/:id/delete-preview", authMiddleware, requireModelDeletePerm, async (req, res) => {
   try {
     const { id } = req.params;
     const model = await Model.findById(id);
@@ -1724,7 +1749,7 @@ app.get("/api/admin/models/:id/delete-preview", authMiddleware, requireAdmin, as
 });
 
 // Force delete (aggressive cleanup)
-app.post("/api/admin/models/:id/force-delete", authMiddleware, requireAdmin, async (req, res) => {
+app.post("/api/admin/models/:id/force-delete", authMiddleware, requireModelDeletePerm, async (req, res) => {
   try {
     const { id } = req.params;
     const model = await Model.findById(id);
@@ -1745,7 +1770,7 @@ app.post("/api/admin/models/:id/force-delete", authMiddleware, requireAdmin, asy
 });
 
 // Get model files list
-app.get("/api/admin/models/files", authMiddleware, requireAdmin, async (req, res) => {
+app.get("/api/admin/models/files", authMiddleware, requireModelManager, async (req, res) => {
   try {
     const modelsPath = path.join(__dirname, '../Frontend/public/models');
     
@@ -2029,7 +2054,7 @@ app.get('/api/embed/resolve', async (req, res) => {
 });
 
 // Admin: list embed tokens for a model
-app.get('/api/admin/models/:id/embed-tokens', authMiddleware, requireAdmin, async (req, res) => {
+app.get('/api/admin/models/:id/embed-tokens', authMiddleware, requireModelManager, async (req, res) => {
   try {
     const modelId = req.params.id;
     const EmbedToken = require('./models/EmbedToken');
@@ -2109,7 +2134,7 @@ const uploadConfig = multer({
 });
 
 // Upload config JSON
-app.post('/api/upload-config', authMiddleware, requireAdmin, uploadConfig.single('file'), async (req, res) => {
+app.post('/api/upload-config', authMiddleware, requireModelManager, uploadConfig.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No config file uploaded' });
@@ -2302,9 +2327,7 @@ app.post('/api/admin-dashboard/users', authMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ message: 'Access denied' });
 
-    let { name, email, password, role = 'user', permissions = {} } = req.body;
-    // Admins cannot create superadmin accounts
-    if (role === 'superadmin') role = 'admin';
+    const { name, email, password, role = 'user', permissions = {} } = req.body;
     if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required' });
 
     const existing = await User.findOne({ email: email.toLowerCase().trim() });
