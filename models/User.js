@@ -29,12 +29,15 @@ const userSchema = new mongoose.Schema({
     canUpload: { type: Boolean, default: true },
     canViewAll: { type: Boolean, default: false }
   },
-  isActive: {
-    type: Boolean,
-    default: true
-  },
   lastLogin: {
     type: Date
+  },
+  // OTP fields for password reset
+  resetOtp: {
+    type: String,
+  },
+  resetOtpExpires: {
+    type: Date,
   },
   createdAt: {
     type: Date,

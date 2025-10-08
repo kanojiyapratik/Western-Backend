@@ -35,21 +35,7 @@ router.put("/users/:id/permissions", authMiddleware(["admin"]), async (req, res)
 });
 
 // Toggle user active status
-router.patch("/users/:id/toggle-active", authMiddleware(["admin"]), async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    
-    user.isActive = !user.isActive;
-    await user.save();
-    
-    res.json({ message: "User status updated", isActive: user.isActive });
-  } catch (error) {
-    res.status(500).json({ message: "Error updating user status", error: error.message });
-  }
-});
+// Note: Active/Inactive user status removed from the system.
 
 // Delete user
 router.delete("/users/:id", authMiddleware(["admin"]), async (req, res) => {
@@ -85,8 +71,7 @@ router.post("/users", authMiddleware(["admin"]), async (req, res) => {
       email: email.toLowerCase().trim(),
       password: hashedPassword,
       role,
-      permissions,
-      isActive: true
+      permissions
     });
 
     res.status(201).json({ message: 'User created', user: { ...user.toObject(), password: undefined } });

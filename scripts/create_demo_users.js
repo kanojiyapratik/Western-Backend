@@ -35,7 +35,6 @@ async function main() {
       email: u.email,
       password: hashed,
       role: u.role,
-      isActive: true,
       adminQuota: u.adminQuota || null,
       usersCreatedCount: 0
     });

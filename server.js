@@ -74,7 +74,7 @@ const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  role: { type: String, default: "user", enum: ["admin", "user"] },
+  role: { type: String, default: "user", enum: ["admin", "user", "superadmin"] },
   permissions: {
     doorPresets: { type: Boolean, default: false },
     doorToggles: { type: Boolean, default: false },
@@ -99,7 +99,7 @@ const UserSchema = new mongoose.Schema({
     canMove: { type: Boolean, default: false },
     imageDownloadQualities: { type: [String], enum: ['average', 'good', 'best'], default: ['average'] }
   },
-  isActive: { type: Boolean, default: true }
+  // Legacy 'isActive' removed - user active/deactivated flag is no longer used
 }, { timestamps: true });
 
 const User = mongoose.model("User", UserSchema);
@@ -437,8 +437,7 @@ const ensureDefaultAccounts = async () => {
           email,
           password: hashedPassword,
           role,
-          permissions,
-          isActive: true
+          permissions
         });
         console.log(`✅ Default ${role} account created: ${email} / ${password}`);
         return;
@@ -451,7 +450,7 @@ const ensureDefaultAccounts = async () => {
       if (user.role !== role) updates.role = role;
       // Restore full demo permissions to avoid "No Configuration" state
       updates.permissions = permissions;
-      if (!user.isActive) updates.isActive = true;
+  // Legacy 'isActive' removed - no active flag to update
 
       if (Object.keys(updates).length) {
         await User.updateOne({ _id: user._id }, { $set: updates });
@@ -515,9 +514,7 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ message: "Invalid token" });
     }
 
-    if (!user.isActive) {
-      return res.status(401).json({ message: "Account deactivated" });
-    }
+    // Legacy account active/deactivated flag removed; proceed with request
 
     req.user = user;
     next();
@@ -582,8 +579,7 @@ app.post("/api/auth/register", async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        permissions: user.permissions,
-        isActive: user.isActive
+        permissions: user.permissions
       }
     });
   } catch (error) {
@@ -609,9 +605,7 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
     
-    if (!user.isActive) {
-      return res.status(401).json({ message: "Account is deactivated" });
-    }
+    // Legacy account activation flag removed; proceed with password check
 
     // Check password
     const isValidPassword = await bcrypt.compare(password, user.password);
@@ -629,8 +623,7 @@ app.post("/api/auth/login", async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        permissions: user.permissions,
-        isActive: user.isActive
+        permissions: user.permissions
       }
     });
   } catch (error) {
@@ -649,8 +642,7 @@ app.get("/api/auth/verify", authMiddleware, async (req, res) => {
         name: req.user.name,
         email: req.user.email,
         role: req.user.role,
-        permissions: req.user.permissions,
-        isActive: req.user.isActive
+        permissions: req.user.permissions
       }
     });
   } catch (error) {
@@ -666,10 +658,82 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
       name: req.user.name,
       email: req.user.email,
       role: req.user.role,
-      permissions: req.user.permissions,
-      isActive: req.user.isActive
+      permissions: req.user.permissions
     }
   });
+});
+
+// Password reset endpoints (OTP)
+app.post('/api/auth/request-password-reset', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: 'Email is required' });
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.resetOtp = otp;
+    user.resetOtpExpires = new Date(Date.now() + 15 * 60 * 1000);
+    await user.save();
+
+    const subject = 'Your password reset code';
+    const html = `<p>Your password reset code is <strong>${otp}</strong>. It expires in 15 minutes.</p>`;
+    const emailResult = await sendEmbedEmail(user.email, subject, html);
+    if (!emailResult.success) return res.status(500).json({ message: 'Failed to send reset email', error: emailResult.error });
+
+    res.json({ message: 'OTP sent to email' });
+  } catch (error) {
+    console.error('request-password-reset error:', error);
+    res.status(500).json({ message: 'Error requesting password reset', error: error.message });
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+    if (!email || !otp || !newPassword) return res.status(400).json({ message: 'Email, otp and newPassword are required' });
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (!user.resetOtp || !user.resetOtpExpires) return res.status(400).json({ message: 'No reset requested' });
+    if (user.resetOtp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
+    if (user.resetOtpExpires < new Date()) return res.status(400).json({ message: 'OTP expired' });
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    user.password = hashed;
+    user.resetOtp = undefined;
+    user.resetOtpExpires = undefined;
+    await user.save();
+
+    res.json({ message: 'Password reset successful' });
+  } catch (error) {
+    console.error('reset-password error:', error);
+    res.status(500).json({ message: 'Error resetting password', error: error.message });
+  }
+});
+
+app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) return res.status(400).json({ message: 'currentPassword and newPassword are required' });
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const isValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isValid) return res.status(400).json({ message: 'Current password is incorrect' });
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    user.password = hashed;
+    await user.save();
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('change-password error:', error);
+    res.status(500).json({ message: 'Error changing password', error: error.message });
+  }
 });
 
 // Health check endpoint
@@ -680,7 +744,7 @@ app.get("/api/health", (req, res) => {
 // Admin dashboard routes
 app.get("/api/admin-dashboard/users", authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
+    if (!(req.user.role === "admin" || req.user.role === "superadmin")) {
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -716,7 +780,7 @@ app.get("/api/admin-dashboard/users", authMiddleware, async (req, res) => {
 
 app.put("/api/admin-dashboard/users/:id/permissions", authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
+    if (!(req.user.role === "admin" || req.user.role === "superadmin")) {
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -763,46 +827,11 @@ app.put("/api/admin-dashboard/users/:id/permissions", authMiddleware, async (req
   }
 });
 
-app.patch("/api/admin-dashboard/users/:id/toggle-active", authMiddleware, async (req, res) => {
-  try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    
-    // Don't allow deactivating yourself
-    if (user._id.toString() === req.user._id.toString()) {
-      return res.status(400).json({ message: "Cannot deactivate your own account" });
-    }
-    
-    user.isActive = !user.isActive;
-    await user.save();
-    
-    res.json({ 
-      message: "User status updated successfully", 
-      isActive: user.isActive,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        isActive: user.isActive,
-        permissions: user.permissions
-      }
-    });
-  } catch (error) {
-    console.error("Toggle active status error:", error);
-    res.status(500).json({ message: "Error updating user status", error: error.message });
-  }
-});
+// Note: user active/deactivated status (isActive) has been removed from the system.
 
 app.delete("/api/admin-dashboard/users/:id", authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
+    if (!(req.user.role === "admin" || req.user.role === "superadmin")) {
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -1193,9 +1222,9 @@ app.get("/api/models", async (req, res) => {
   }
 });
 
-// Admin only routes
+// Admin only routes (allow superadmin as well)
 const requireAdmin = (req, res, next) => {
-  if (!req.user || req.user.role !== 'admin') {
+  if (!req.user || !(req.user.role === 'admin' || req.user.role === 'superadmin')) {
     return res.status(403).json({ message: 'Admin access required' });
   }
   next();
@@ -2325,7 +2354,8 @@ app.get('/api/activity/export', authMiddleware, async (req, res) => {
 // Create user (admin only)
 app.post('/api/admin-dashboard/users', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Access denied' });
+    // Allow both admin and superadmin to create users
+    if (!(req.user.role === 'admin' || req.user.role === 'superadmin')) return res.status(403).json({ message: 'Access denied' });
 
     const { name, email, password, role = 'user', permissions = {} } = req.body;
     if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required' });
@@ -2341,8 +2371,7 @@ app.post('/api/admin-dashboard/users', authMiddleware, async (req, res) => {
       email: email.toLowerCase().trim(),
       password: hashedPassword,
       role,
-      permissions,
-      isActive: true
+      permissions
     });
 
     await newUser.save();

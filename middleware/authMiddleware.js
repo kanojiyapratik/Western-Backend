@@ -22,9 +22,7 @@ const authMiddleware = (allowedRoles = []) => {
         return res.status(401).json({ message: "User not found" });
       }
       
-      if (!user.isActive) {
-        return res.status(401).json({ message: "Account is deactivated" });
-      }
+      // Removed legacy account active/deactivated check (isActive field removed)
 
       // Check role if specific roles are required
       if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {

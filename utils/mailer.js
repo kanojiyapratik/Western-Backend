@@ -1,3 +1,19 @@
+const path = require('path');
+// Ensure .env from Backend folder is loaded when this module is required directly
+try {
+  const dotenv = require('dotenv');
+  const envPath = path.resolve(__dirname, '..', '.env');
+  const result = dotenv.config({ path: envPath });
+  if (result.error) {
+    // fallback to default config (may already be loaded by server.js)
+    // console.log('No .env at', envPath, 'falling back to process.env');
+  } else {
+    console.log('\u2139\ufe0f loaded env from', envPath);
+  }
+} catch (e) {
+  // ignore if dotenv not available
+}
+
 const sgMail = require('@sendgrid/mail');
 const nodemailer = require('nodemailer');
 
