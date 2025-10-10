@@ -20,14 +20,16 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin', 'superadmin'],
-    default: 'user'
+    enum: ['employee', 'admin', 'superadmin', 'manager', 'assistantmanager', 'custom'],
+    default: 'employee'
+  },
+  customRoleName: {
+    type: String,
+    default: ''
   },
   permissions: {
-    canEdit: { type: Boolean, default: true },
-    canDelete: { type: Boolean, default: false },
-    canUpload: { type: Boolean, default: true },
-    canViewAll: { type: Boolean, default: false }
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
   lastLogin: {
     type: Date

@@ -17,20 +17,28 @@ router.get("/users", authMiddleware(["admin"]), async (req, res) => {
 // Update user permissions
 router.put("/users/:id/permissions", authMiddleware(["admin"]), async (req, res) => {
   try {
-    const { permissions } = req.body;
+    const { permissions, role, customRoleName } = req.body;
+    console.log('Updating user with:', { permissions, role, customRoleName });
+    
+    const updateFields = { 
+      $set: { 
+        permissions,
+        role,
+        customRoleName: customRoleName || ''
+      }
+    };
+    
     const user = await User.findByIdAndUpdate(
       req.params.id,
-      { permissions },
-      { new: true, select: "-password" }
+      updateFields,
+      { new: true, select: "-password", runValidators: true }
     );
-    
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
-    
-    res.json({ message: "Permissions updated successfully", user });
+    res.json({ message: "User updated successfully", user });
   } catch (error) {
-    res.status(500).json({ message: "Error updating permissions", error: error.message });
+    res.status(500).json({ message: "Error updating user", error: error.message });
   }
 });
 
@@ -54,7 +62,7 @@ router.delete("/users/:id", authMiddleware(["admin"]), async (req, res) => {
 // Create new user (admin only)
 router.post("/users", authMiddleware(["admin"]), async (req, res) => {
   try {
-    const { name, email, password, role = 'user', permissions = {} } = req.body;
+    const { name, email, password, role = 'employee', permissions = {} } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: "Name, email and password are required" });

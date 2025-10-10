@@ -74,7 +74,8 @@ const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  role: { type: String, default: "user", enum: ["admin", "user", "superadmin"] },
+  role: { type: String, default: "user", enum: ["admin", "user", "superadmin", "employee", "assistantmanager", "manager", "custom"] },
+  customRoleName: { type: String, default: "" },
   permissions: {
     doorPresets: { type: Boolean, default: false },
     doorToggles: { type: Boolean, default: false },
@@ -784,7 +785,7 @@ app.put("/api/admin-dashboard/users/:id/permissions", authMiddleware, async (req
       return res.status(403).json({ message: "Access denied" });
     }
 
-    const { permissions } = req.body;
+    const { permissions, role, customRoleName } = req.body;
     
     // Ensure complete permissions structure
     const defaultPermissions = {
@@ -803,9 +804,20 @@ app.put("/api/admin-dashboard/users/:id/permissions", authMiddleware, async (req
 
     const completePermissions = { ...defaultPermissions, ...permissions };
 
+    // Build update object with permissions and role/customRoleName if provided
+    const updateData = { permissions: completePermissions };
+    
+    if (typeof role === 'string' && role.trim()) {
+      updateData.role = role.trim();
+    }
+    
+    if (typeof customRoleName === 'string') {
+      updateData.customRoleName = customRoleName.trim();
+    }
+
     const user = await User.findByIdAndUpdate(
       req.params.id,
-      { permissions: completePermissions },
+      updateData,
       { new: true, select: "-password" }
     );
     
