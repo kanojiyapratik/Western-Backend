@@ -1407,9 +1407,8 @@ app.post("/api/admin/models", authMiddleware, requireModelUploadPerm, async (req
     console.log('Model metadata:', newModel.metadata);
     console.log('==================');
 
-    // Send embed emails to all users
+    // Send public viewer emails to all users
     try {
-      const EmbedToken = require('./models/EmbedToken');
       const User = require('./models/User');
 
       // Get all users
@@ -1417,50 +1416,36 @@ app.post("/api/admin/models", authMiddleware, requireModelUploadPerm, async (req
       console.log(`📧 Found ${users.length} users to notify`);
 
       if (users.length > 0) {
-        // Generate per-user embed tokens
-        const tokensToInsert = users.map(user => ({
-          userId: user._id,
-          modelId: newModel._id,
-          token: require('crypto').randomBytes(16).toString('hex'),
-          active: true
-        }));
-
-        const inserted = await EmbedToken.insertMany(tokensToInsert);
-        const host = process.env.FRONTEND_HOST || 'http://localhost:5173';
-        const embedUrls = inserted.map(doc => ({ userId: doc.userId, url: `${host}/embed?token=${doc.token}` }));
+        const host = process.env.FRONTEND_HOST || 'http://192.168.1.7:5173';
+        const publicViewerUrl = `${host}/public-viewer.html?model=${newModel._id}`;
 
         // Send email to each user
-        for (let i = 0; i < users.length; i++) {
-          const user = users[i];
-          const embedUrl = embedUrls.find(e => e.userId.toString() === user._id.toString())?.url;
+        for (const user of users) {
+          const subject = `New 3D Model Available: ${newModel.name}`;
+          const html = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #333;">New 3D Model Available!</h2>
+              <p>Hello ${user.name || 'User'},</p>
+              <p>A new 3D model has been added to our configurator: <strong>${newModel.name}</strong></p>
+              <p>You can view and interact with this model by clicking the link below:</p>
+              <p style="text-align: center; margin: 30px 0;">
+                <a href="${publicViewerUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View 3D Model</a>
+              </p>
+              <p>The link will remain active for you to access this model anytime.</p>
+              <p>Best regards,<br>The 3D Configurator Team</p>
+            </div>
+          `;
 
-          if (embedUrl) {
-            const subject = `New 3D Model Available: ${newModel.name}`;
-            const html = `
-              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <h2 style="color: #333;">New 3D Model Available!</h2>
-                <p>Hello ${user.name || 'User'},</p>
-                <p>A new 3D model has been added to our configurator: <strong>${newModel.name}</strong></p>
-                <p>You can view and interact with this model by clicking the link below:</p>
-                <p style="text-align: center; margin: 30px 0;">
-                  <a href="${embedUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View 3D Model</a>
-                </p>
-                <p>The link will remain active for you to access this model anytime.</p>
-                <p>Best regards,<br>The 3D Configurator Team</p>
-              </div>
-            `;
-
-            const emailResult = await sendEmbedEmail(user.email, subject, html, embedUrl);
-            if (emailResult.success) {
-              console.log(`✅ Email sent to ${user.email}`);
-            } else {
-              console.error(`❌ Failed to send email to ${user.email}:`, emailResult.error);
-            }
+          const emailResult = await sendEmbedEmail(user.email, subject, html, publicViewerUrl);
+          if (emailResult.success) {
+            console.log(`✅ Email sent to ${user.email}`);
+          } else {
+            console.error(`❌ Failed to send email to ${user.email}:`, emailResult.error);
           }
         }
       }
     } catch (emailError) {
-      console.error('❌ Error sending embed emails:', emailError);
+      console.error('❌ Error sending public viewer emails:', emailError);
       // Don't fail the model save if email sending fails
     }
 
@@ -1877,7 +1862,80 @@ app.delete("/api/configs/:id", authMiddleware, async (req, res) => {
 // Serve configuration texture files
 app.use('/config-textures', express.static(path.join(__dirname, '../Frontend/public/config-textures')));
 
-// Resolve embed token to model metadata (public endpoint)
+// Public model endpoint (no authentication required)
+app.get('/api/public/model/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: 'Model ID required' });
+    
+    const model = await Model.findOne({ _id: id, status: 'active' });
+    if (!model) return res.status(404).json({ message: 'Model not found' });
+    
+    // Format model data similar to the main /api/models endpoint
+    const meta = model.metadata || {};
+    const uiWidgets = Array.isArray(model.uiWidgets) && model.uiWidgets.length
+      ? model.uiWidgets
+      : (Array.isArray(meta.uiWidgets) ? meta.uiWidgets : []);
+    
+    const lights = Array.isArray(model.lights) && model.lights.length
+      ? model.lights
+      : (Array.isArray(meta.lights) ? meta.lights : []);
+    const hiddenInitially = Array.isArray(model.hiddenInitially) && model.hiddenInitially.length
+      ? model.hiddenInitially
+      : (Array.isArray(meta.hiddenInitially) ? meta.hiddenInitially : []);
+    
+    const normalizeAssetPath = (p) => {
+      if (!p || typeof p !== 'string') return undefined;
+      if (p.startsWith('http://') || p.startsWith('https://')) return p;
+      if (p.startsWith('/models/')) return `http://192.168.1.7:5000${p}`;
+      return `http://192.168.1.7:5000/models/${p}`;
+    };
+    
+    const assetsRaw = model.assets || undefined;
+    const assets = assetsRaw && typeof assetsRaw === 'object'
+      ? Object.fromEntries(
+          Object.entries(assetsRaw).map(([key, value]) => [key, normalizeAssetPath(value)])
+        )
+      : undefined;
+    
+    const normalizeConfigUrl = (u) => {
+      if (!u || typeof u !== 'string') return undefined;
+      if (u.startsWith('http://') || u.startsWith('https://')) return u;
+      if (u.startsWith('/')) return `http://192.168.1.7:5000${u}`;
+      return `http://192.168.1.7:5000/${u}`;
+    };
+    
+    const payload = {
+      id: model._id,
+      name: model.name,
+      displayName: model.displayName,
+      file: `http://192.168.1.7:5000/models/${model.file}`,
+      section: model.section || 'Upright Counter',
+      type: model.type,
+      configUrl: normalizeConfigUrl(model.configUrl || meta.configUrl) || undefined,
+      interactionGroups: model.interactionGroups || [],
+      metadata: { ...meta, uiWidgets },
+      uiWidgets,
+      lights,
+      hiddenInitially,
+      camera: model.camera || meta.camera || undefined,
+      assets,
+      presets: model.presets || undefined,
+      placementMode: model.placementMode || 'autofit',
+      modelPosition: Array.isArray(model.modelPosition) ? model.modelPosition : undefined,
+      modelRotation: Array.isArray(model.modelRotation) ? model.modelRotation : undefined,
+      modelScale: typeof model.modelScale === 'number' ? model.modelScale : undefined,
+      readOnly: true
+    };
+    
+    return res.json(payload);
+  } catch (error) {
+    console.error('Public model fetch error:', error);
+    return res.status(500).json({ message: 'Internal error', error: error.message });
+  }
+});
+
+// Legacy embed token endpoint (kept for backward compatibility)
 app.get('/api/embed/resolve', async (req, res) => {
   try {
     const { token } = req.query;
