@@ -4,8 +4,8 @@ const router = express.Router();
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 
-// Get all users (admin only)
-router.get("/users", authMiddleware(["admin"]), async (req, res) => {
+// Get all users (admin only or userManagement permission)
+router.get("/users", authMiddleware(["admin"], "userManagement"), async (req, res) => {
   try {
     const users = await User.find({}, { password: 0 });
     res.json(users);
@@ -15,10 +15,30 @@ router.get("/users", authMiddleware(["admin"]), async (req, res) => {
 });
 
 // Update user permissions
-router.put("/users/:id/permissions", authMiddleware(["admin"]), async (req, res) => {
+router.put("/users/:id/permissions", authMiddleware(["admin"], "userManageEdit"), async (req, res) => {
   try {
     const { permissions, role, customRoleName } = req.body;
-    console.log('Updating user with:', { permissions, role, customRoleName });
+    console.log('=== BACKEND UPDATE DEBUG ===');
+    console.log('User ID:', req.params.id);
+    console.log('Received full request body:', req.body);
+    console.log('Received permissions object:', JSON.stringify(permissions, null, 2));
+    console.log('User management permissions received:', {
+      userManagement: permissions?.userManagement,
+      userManageCreate: permissions?.userManageCreate,
+      userManageEdit: permissions?.userManageEdit,
+      userManageDelete: permissions?.userManageDelete
+    });
+    console.log('Role:', role);
+    
+    // Check if permissions object contains the user management permissions
+    const userMgmtKeys = ['userManagement', 'userManageCreate', 'userManageEdit', 'userManageDelete'];
+    const userMgmtPerms = {};
+    userMgmtKeys.forEach(key => {
+      if (permissions && permissions.hasOwnProperty(key)) {
+        userMgmtPerms[key] = permissions[key];
+      }
+    });
+    console.log('Extracted user management permissions:', userMgmtPerms);
     
     const updateFields = { 
       $set: { 
@@ -28,6 +48,8 @@ router.put("/users/:id/permissions", authMiddleware(["admin"]), async (req, res)
       }
     };
     
+    console.log('MongoDB update fields:', JSON.stringify(updateFields, null, 2));
+    
     const user = await User.findByIdAndUpdate(
       req.params.id,
       updateFields,
@@ -36,8 +58,31 @@ router.put("/users/:id/permissions", authMiddleware(["admin"]), async (req, res)
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
-    res.json({ message: "User updated successfully", user });
+    
+    console.log('=== POST-SAVE DEBUG ===');
+    console.log('Saved user full object:', JSON.stringify(user.toObject(), null, 2));
+    console.log('Saved user permissions:', JSON.stringify(user.permissions, null, 2));
+    console.log('Saved user management permissions:', {
+      userManagement: user.permissions?.userManagement,
+      userManageCreate: user.permissions?.userManageCreate,
+      userManageEdit: user.permissions?.userManageEdit,
+      userManageDelete: user.permissions?.userManageDelete
+    });
+    
+    // Also manually check the database to see what was actually saved
+    const dbUser = await User.findById(req.params.id).select('-password');
+    console.log('=== DIRECT DB CHECK ===');
+    console.log('DB user permissions:', JSON.stringify(dbUser.permissions, null, 2));
+    console.log('DB user management permissions:', {
+      userManagement: dbUser.permissions?.userManagement,
+      userManageCreate: dbUser.permissions?.userManageCreate,
+      userManageEdit: dbUser.permissions?.userManageEdit,
+      userManageDelete: dbUser.permissions?.userManageDelete
+    });
+    
+    res.json({ message: "Permissions updated successfully", user });
   } catch (error) {
+    console.error('Update error:', error);
     res.status(500).json({ message: "Error updating user", error: error.message });
   }
 });
@@ -46,7 +91,7 @@ router.put("/users/:id/permissions", authMiddleware(["admin"]), async (req, res)
 // Note: Active/Inactive user status removed from the system.
 
 // Delete user
-router.delete("/users/:id", authMiddleware(["admin"]), async (req, res) => {
+router.delete("/users/:id", authMiddleware(["admin"], "userManageDelete"), async (req, res) => {
   try {
     const user = await User.findByIdAndDelete(req.params.id);
     if (!user) {
@@ -59,8 +104,8 @@ router.delete("/users/:id", authMiddleware(["admin"]), async (req, res) => {
   }
 });
 
-// Create new user (admin only)
-router.post("/users", authMiddleware(["admin"]), async (req, res) => {
+// Create new user (admin only or userManageCreate permission)
+router.post("/users", authMiddleware(["admin"], "userManageCreate"), async (req, res) => {
   try {
     const { name, email, password, role = 'employee', permissions = {} } = req.body;
 

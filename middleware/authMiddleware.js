@@ -2,7 +2,7 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
-const authMiddleware = (allowedRoles = []) => {
+const authMiddleware = (allowedRoles = [], requiredPermission = null) => {
   return async (req, res, next) => {
     try {
       let token;
@@ -22,10 +22,28 @@ const authMiddleware = (allowedRoles = []) => {
         return res.status(401).json({ message: "User not found" });
       }
       
-      // Removed legacy account active/deactivated check (isActive field removed)
-
       // Check role if specific roles are required
-      if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
+      const hasRole = allowedRoles.length === 0 || allowedRoles.includes(user.role);
+      
+      // Check permission if required
+      const hasPermission = !requiredPermission || (user.permissions && user.permissions[requiredPermission]);
+      
+      // Debug logging for permission issues
+      if (requiredPermission) {
+        console.log('=== AUTH MIDDLEWARE DEBUG ===');
+        console.log('User:', user.name, 'Role:', user.role);
+        console.log('Required roles:', allowedRoles);
+        console.log('Required permission:', requiredPermission);
+        console.log('Has role?', hasRole);
+        console.log('Has permission?', hasPermission);
+        console.log('Specific permission value:', user.permissions?.[requiredPermission]);
+      }
+      
+      if (!hasRole && !hasPermission) {
+        console.log('=== ACCESS DENIED ===');
+        console.log('User:', user.name, 'tried to access with roles:', allowedRoles, 'permission:', requiredPermission);
+        console.log('User role:', user.role, 'hasRole:', hasRole);
+        console.log('Required permission:', requiredPermission, 'hasPermission:', hasPermission);
         return res.status(403).json({ message: "Access denied: insufficient permissions" });
       }
 

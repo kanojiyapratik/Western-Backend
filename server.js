@@ -62,6 +62,9 @@ app.use('/configs', express.static(path.join(__dirname, '../Frontend/public/conf
 // API route for updating config files
 app.use('/api/configs', require('./routes/config'));
 
+// Admin dashboard routes with permission-based access
+app.use('/api/admin-dashboard', require('./routes/adminDashboard'));
+
 // Connect to MongoDB
 const MONGODB_URI = process.env.MONGO_URI || "mongodb://localhost:27017/3dconfigurator";
 
@@ -69,41 +72,8 @@ mongoose.connect(MONGODB_URI)
   .then(() => console.log("✅ MongoDB Connected"))
   .catch(err => console.error("❌ MongoDB connection error:", err));
 
-// User Model
-const UserSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-  role: { type: String, default: "user", enum: ["admin", "user", "superadmin", "employee", "assistantmanager", "manager", "custom"] },
-  customRoleName: { type: String, default: "" },
-  permissions: {
-    doorPresets: { type: Boolean, default: false },
-    doorToggles: { type: Boolean, default: false },
-    drawerToggles: { type: Boolean, default: false },
-    textureWidget: { type: Boolean, default: false },
-    lightWidget: { type: Boolean, default: false },
-    globalTextureWidget: { type: Boolean, default: false },
-    screenshotWidget: { type: Boolean, default: false },
-  // Model management permissions
-  // Legacy master switch (kept): when true, implies full model management
-  modelUpload: { type: Boolean, default: false },
-  // New granular switches
-  modelManageUpload: { type: Boolean, default: false },
-  modelManageEdit: { type: Boolean, default: false },
-  modelManageDelete: { type: Boolean, default: false },
-    // Add missing widget permissions
-  // Removed reflectionWidget, movementWidget, customWidget
-    saveConfig: { type: Boolean, default: false },
-    canRotate: { type: Boolean, default: true },
-    canPan: { type: Boolean, default: false },
-    canZoom: { type: Boolean, default: false },
-    canMove: { type: Boolean, default: false },
-    imageDownloadQualities: { type: [String], enum: ['average', 'good', 'best'], default: ['average'] }
-  },
-  // Legacy 'isActive' removed - user active/deactivated flag is no longer used
-}, { timestamps: true });
-
-const User = mongoose.model("User", UserSchema);
+// Import the correct User model from models/User.js (which supports all permissions)
+const User = require('./models/User');
 
 
 // Use new Model.js schema (with section)
@@ -742,168 +712,7 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "OK", message: "Server is running" });
 });
 
-// Admin dashboard routes
-app.get("/api/admin-dashboard/users", authMiddleware, async (req, res) => {
-  try {
-    if (!(req.user.role === "admin" || req.user.role === "superadmin")) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const users = await User.find({}, { password: 0 }).sort({ createdAt: -1 });
-    
-    // Ensure all users have complete permissions structure
-    const defaultPermissions = {
-      doorPresets: false,
-      doorToggles: false,
-      drawerToggles: false,
-      textureWidget: false,
-      lightWidget: false,
-      globalTextureWidget: false,
-      modelUpload: false,
-      saveConfig: false,
-      canRotate: true,
-      canPan: false,
-      canZoom: false
-    };
-
-    const usersWithCompletePermissions = users.map(user => {
-      const userObj = user.toObject();
-      userObj.permissions = { ...defaultPermissions, ...userObj.permissions };
-      return userObj;
-    });
-
-    res.json(usersWithCompletePermissions);
-  } catch (error) {
-    console.error("Get users error:", error);
-    res.status(500).json({ message: "Error fetching users", error: error.message });
-  }
-});
-
-app.put("/api/admin-dashboard/users/:id/permissions", authMiddleware, async (req, res) => {
-  try {
-    if (!(req.user.role === "admin" || req.user.role === "superadmin")) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const { permissions, role, customRoleName } = req.body;
-    
-    // Ensure complete permissions structure
-    const defaultPermissions = {
-      doorPresets: false,
-      doorToggles: false,
-      drawerToggles: false,
-      textureWidget: false,
-      lightWidget: false,
-      globalTextureWidget: false,
-      modelUpload: false,
-      saveConfig: false,
-      canRotate: true,
-      canPan: false,
-      canZoom: false
-    };
-
-    const completePermissions = { ...defaultPermissions, ...permissions };
-
-    // Build update object with permissions and role/customRoleName if provided
-    const updateData = { permissions: completePermissions };
-    
-    if (typeof role === 'string' && role.trim()) {
-      updateData.role = role.trim();
-    }
-    
-    if (typeof customRoleName === 'string') {
-      updateData.customRoleName = customRoleName.trim();
-    }
-
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true, select: "-password" }
-    );
-    
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    
-    // Notify any connected SSE clients for that user about permission change
-    try {
-      sendSseEventToUser(user._id.toString(), 'permissionsUpdated', { permissions: user.permissions });
-    } catch (e) {
-      console.warn('Failed to send SSE permissionsUpdated event', e && e.message);
-    }
-
-    res.json({ message: "Permissions updated successfully", user });
-  } catch (error) {
-    console.error("Update permissions error:", error);
-    res.status(500).json({ message: "Error updating permissions", error: error.message });
-  }
-});
-
-// Note: user active/deactivated status (isActive) has been removed from the system.
-
-app.delete("/api/admin-dashboard/users/:id", authMiddleware, async (req, res) => {
-  try {
-    if (!(req.user.role === "admin" || req.user.role === "superadmin")) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    
-    // Don't allow deleting yourself
-    if (user._id.toString() === req.user._id.toString()) {
-      return res.status(400).json({ message: "Cannot delete your own account" });
-    }
-    // Check optional transferTo query param
-    const transferTo = req.query.transferTo;
-
-    if (transferTo) {
-      // Validate transferTo id
-      if (!mongoose.Types.ObjectId.isValid(transferTo)) {
-        return res.status(400).json({ message: 'Invalid transferTo user id' });
-      }
-
-      const targetUser = await User.findById(transferTo);
-      if (!targetUser) {
-        return res.status(404).json({ message: 'Target user for transfer not found' });
-      }
-
-      // Reassign saved configurations to the target user
-      const result = await SavedConfiguration.updateMany({ userId: user._id }, { $set: { userId: targetUser._id } });
-
-      // Finally delete the user
-      await User.findByIdAndDelete(req.params.id);
-
-      return res.json({ message: 'User deleted and configurations transferred', transferredCount: result.modifiedCount || result.nModified || 0 });
-    } else {
-      // No transfer requested - delete configs owned by this user and clean up textures
-      try {
-        const configs = await SavedConfiguration.find({ userId: user._id }).select('_id');
-        for (const cfg of configs) {
-          try {
-            await cleanupConfigTextures(cfg._id.toString());
-          } catch (cleanupErr) {
-            console.warn('Failed to cleanup textures for config', cfg._id, cleanupErr && (cleanupErr.stack || cleanupErr));
-          }
-        }
-
-        // Remove configurations from DB
-        await SavedConfiguration.deleteMany({ userId: user._id });
-      } catch (cfgErr) {
-        console.error('Error while deleting user configurations during user deletion:', cfgErr && (cfgErr.stack || cfgErr));
-        // proceed with user deletion even if config cleanup failed, but report warning
-      }
-
-      await User.findByIdAndDelete(req.params.id);
-      return res.json({ message: 'User and their configurations deleted' });
-    }
-  } catch (error) {
-    console.error("Delete user error:", error);
-    res.status(500).json({ message: "Error deleting user", error: error.message });
-  }
-});
+// Note: Admin dashboard routes are now handled by /routes/adminDashboard.js with proper permission-based access control
 
 // Call after MongoDB connection
 mongoose.connection.on("connected", () => {
@@ -2363,40 +2172,7 @@ app.get('/api/activity/export', authMiddleware, async (req, res) => {
   }
 });
 
-// Create user (admin only)
-app.post('/api/admin-dashboard/users', authMiddleware, async (req, res) => {
-  try {
-    // Allow both admin and superadmin to create users
-    if (!(req.user.role === 'admin' || req.user.role === 'superadmin')) return res.status(403).json({ message: 'Access denied' });
-
-    const { name, email, password, role = 'user', permissions = {} } = req.body;
-    if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required' });
-
-    const existing = await User.findOne({ email: email.toLowerCase().trim() });
-    if (existing) return res.status(400).json({ message: 'User already exists' });
-
-    const bcrypt = require('bcryptjs');
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const newUser = new User({
-      name,
-      email: email.toLowerCase().trim(),
-      password: hashedPassword,
-      role,
-      permissions
-    });
-
-    await newUser.save();
-
-    const userObj = newUser.toObject();
-    delete userObj.password;
-
-    res.status(201).json({ message: 'User created', user: userObj });
-  } catch (error) {
-    console.error('Create user error:', error);
-    res.status(500).json({ message: 'Error creating user', error: error.message });
-  }
-});
+// Note: User creation is now handled by /routes/adminDashboard.js with proper permission-based access control
 
 // SSE stream endpoint for real-time events (permissions updates etc.)
 app.get('/api/stream', async (req, res) => {
