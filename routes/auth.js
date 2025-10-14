@@ -164,9 +164,8 @@ router.post('/reset-password', async (req, res) => {
     if (user.resetOtp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
     if (user.resetOtpExpires < new Date()) return res.status(400).json({ message: 'OTP expired' });
 
-    // set new password
-    const hashed = await bcrypt.hash(newPassword, 10);
-    user.password = hashed;
+    // set new password (let the model middleware handle hashing)
+    user.password = newPassword;
     user.resetOtp = undefined;
     user.resetOtpExpires = undefined;
     await user.save();
@@ -189,8 +188,8 @@ router.post('/change-password', authMiddleware(["admin", "user"]), async (req, r
     const isValid = await bcrypt.compare(currentPassword, user.password);
     if (!isValid) return res.status(400).json({ message: 'Current password is incorrect' });
 
-    const hashed = await bcrypt.hash(newPassword, 10);
-    user.password = hashed;
+    // set new password (let the model middleware handle hashing)
+    user.password = newPassword;
     await user.save();
 
     res.json({ message: 'Password changed successfully' });

@@ -118,13 +118,10 @@ router.post("/users", authMiddleware(["admin"], "userManageCreate"), async (req,
     const existing = await User.findOne({ email: email.toLowerCase().trim() });
     if (existing) return res.status(400).json({ message: "User already exists" });
 
-    const bcrypt = require('bcryptjs');
-    const hashedPassword = await bcrypt.hash(password, 10);
-
     const user = await User.create({
       name,
       email: email.toLowerCase().trim(),
-      password: hashedPassword,
+      password, // let the model middleware handle hashing
       role,
       permissions
     });

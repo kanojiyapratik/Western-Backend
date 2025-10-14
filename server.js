@@ -400,13 +400,11 @@ const ensureDefaultAccounts = async () => {
       permissions
     }) => {
       let user = await User.findOne({ email });
-      const hashedPassword = await bcrypt.hash(password, 10);
-
       if (!user) {
         await User.create({
           name,
           email,
-          password: hashedPassword,
+          password, // let model middleware handle hashing
           role,
           permissions
         });
@@ -417,7 +415,7 @@ const ensureDefaultAccounts = async () => {
       // If user exists, make sure password, role, permissions and active status are as expected
       const passwordMatches = await bcrypt.compare(password, user.password);
       const updates = {};
-      if (!passwordMatches) updates.password = hashedPassword;
+      if (!passwordMatches) updates.password = password; // let model middleware handle hashing
       if (user.role !== role) updates.role = role;
       // Restore full demo permissions to avoid "No Configuration" state
       updates.permissions = permissions;
@@ -519,14 +517,11 @@ app.post("/api/auth/register", async (req, res) => {
       return res.status(400).json({ message: "User already exists" });
     }
     
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    // Create user
+    // Create user (let model middleware handle hashing)
     const user = await User.create({
       name,
       email,
-      password: hashedPassword,
+      password,
       permissions: {
         canRotate: true,
         doorPresets: false,
@@ -672,8 +667,8 @@ app.post('/api/auth/reset-password', async (req, res) => {
     if (user.resetOtp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
     if (user.resetOtpExpires < new Date()) return res.status(400).json({ message: 'OTP expired' });
 
-    const hashed = await bcrypt.hash(newPassword, 10);
-    user.password = hashed;
+    // set new password (let the model middleware handle hashing)
+    user.password = newPassword;
     user.resetOtp = undefined;
     user.resetOtpExpires = undefined;
     await user.save();
@@ -696,8 +691,8 @@ app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
     const isValid = await bcrypt.compare(currentPassword, user.password);
     if (!isValid) return res.status(400).json({ message: 'Current password is incorrect' });
 
-    const hashed = await bcrypt.hash(newPassword, 10);
-    user.password = hashed;
+    // set new password (let the model middleware handle hashing)
+    user.password = newPassword;
     await user.save();
 
     res.json({ message: 'Password changed successfully' });
