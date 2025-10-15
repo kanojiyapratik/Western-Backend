@@ -3,7 +3,7 @@ services:
     name: 3d-configurator-backend
     env: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci --only=production
     startCommand: npm start
     envVars:
       - key: NODE_ENV
