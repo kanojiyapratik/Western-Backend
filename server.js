@@ -972,9 +972,12 @@ app.get("/api/models", async (req, res) => {
       const normalizeAssetPath = (p) => {
         if (!p || typeof p !== 'string') return undefined;
         if (p.startsWith('http://') || p.startsWith('https://')) return p;
-        if (p.startsWith('/models/')) return `http://localhost:5000${p}`;
+        const baseUrl = process.env.NODE_ENV === 'production' 
+          ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+          : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000');
+        if (p.startsWith('/models/')) return `${baseUrl}${p}`;
         // treat as filename
-        return `http://localhost:5000/models/${p}`;
+        return `${baseUrl}/models/${p}`;
       };
       const assetsRaw = model.assets || undefined;
       // Expose ALL asset keys, not just base/doors/drawers/glassDoors
@@ -988,15 +991,20 @@ app.get("/api/models", async (req, res) => {
       const normalizeConfigUrl = (u) => {
         if (!u || typeof u !== 'string') return undefined;
         if (u.startsWith('http://') || u.startsWith('https://')) return u;
-        if (u.startsWith('/')) return `http://localhost:5000${u}`;
-        return `http://localhost:5000/${u}`;
+        const baseUrl = process.env.NODE_ENV === 'production' 
+          ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+          : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000');
+        if (u.startsWith('/')) return `${baseUrl}${u}`;
+        return `${baseUrl}/${u}`;
       };
 
       return {
         id: model._id,
         name: model.name,
         displayName: model.displayName,
-        file: `http://localhost:5000/models/${model.file}`,
+        file: `${process.env.NODE_ENV === 'production' 
+          ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+          : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000')}/models/${model.file}`,
         section: model.section || 'Upright Counter',
         type: model.type,
         // Fallback to metadata.configUrl for legacy/older records
@@ -1449,7 +1457,9 @@ app.post("/api/admin/models", authMiddleware, requireModelUploadPerm, async (req
       console.log(`📧 Found ${users.length} users to notify`);
 
       if (users.length > 0) {
-        const host = process.env.FRONTEND_HOST || 'http://192.168.1.7:5173';
+        const host = process.env.NODE_ENV === 'production'
+          ? (process.env.FRONTEND_URL || 'https://frontendwestern.netlify.app')
+          : (process.env.LOCAL_FRONTEND_URL || 'http://192.168.1.7:5173');
         const publicViewerUrl = `${host}/public-viewer.html?model=${newModel._id}`;
 
         // Send email to each user
@@ -1920,8 +1930,11 @@ app.get('/api/public/model/:id', async (req, res) => {
     const normalizeAssetPath = (p) => {
       if (!p || typeof p !== 'string') return undefined;
       if (p.startsWith('http://') || p.startsWith('https://')) return p;
-      if (p.startsWith('/models/')) return `http://192.168.1.7:5000${p}`;
-      return `http://192.168.1.7:5000/models/${p}`;
+      const baseUrl = process.env.NODE_ENV === 'production' 
+        ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+        : (process.env.LOCAL_BACKEND_URL || 'http://192.168.1.7:5000');
+      if (p.startsWith('/models/')) return `${baseUrl}${p}`;
+      return `${baseUrl}/models/${p}`;
     };
     
     const assetsRaw = model.assets || undefined;
@@ -1934,15 +1947,20 @@ app.get('/api/public/model/:id', async (req, res) => {
     const normalizeConfigUrl = (u) => {
       if (!u || typeof u !== 'string') return undefined;
       if (u.startsWith('http://') || u.startsWith('https://')) return u;
-      if (u.startsWith('/')) return `http://192.168.1.7:5000${u}`;
-      return `http://192.168.1.7:5000/${u}`;
+      const baseUrl = process.env.NODE_ENV === 'production' 
+        ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+        : (process.env.LOCAL_BACKEND_URL || 'http://192.168.1.7:5000');
+      if (u.startsWith('/')) return `${baseUrl}${u}`;
+      return `${baseUrl}/${u}`;
     };
     
     const payload = {
       id: model._id,
       name: model.name,
       displayName: model.displayName,
-      file: `http://192.168.1.7:5000/models/${model.file}`,
+      file: `${process.env.NODE_ENV === 'production' 
+        ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+        : (process.env.LOCAL_BACKEND_URL || 'http://192.168.1.7:5000')}/models/${model.file}`,
       section: model.section || 'Upright Counter',
       type: model.type,
       configUrl: normalizeConfigUrl(model.configUrl || meta.configUrl) || undefined,
@@ -1977,12 +1995,15 @@ app.get('/api/embed/resolve', async (req, res) => {
     const doc = await EmbedToken.findOne({ token, active: true }).populate('modelId');
     if (!doc || !doc.modelId) return res.status(404).json({ message: 'Invalid or expired token' });
     const model = doc.modelId;
+    const baseUrl = process.env.NODE_ENV === 'production' 
+      ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+      : (process.env.LOCAL_BACKEND_URL || 'http://192.168.1.7:5000');
     const payload = {
       id: model._id,
       name: model.name,
       displayName: model.displayName,
-      file: model.file && (model.file.startsWith('http') || model.file.startsWith('https://')) ? model.file : `http://192.168.1.7:5000/models/${model.file}`,
-      configUrl: model.configUrl ? (model.configUrl.startsWith('http') ? model.configUrl : `http://192.168.1.7:5000${model.configUrl}`) : undefined,
+      file: model.file && (model.file.startsWith('http') || model.file.startsWith('https://')) ? model.file : `${baseUrl}/models/${model.file}`,
+      configUrl: model.configUrl ? (model.configUrl.startsWith('http') ? model.configUrl : `${baseUrl}${model.configUrl}`) : undefined,
       assets: model.assets || {},
       metadata: model.metadata || {},
       readOnly: true
@@ -2000,7 +2021,9 @@ app.get('/api/admin/models/:id/embed-tokens', authMiddleware, requireModelManage
     const modelId = req.params.id;
     const EmbedToken = require('./models/EmbedToken');
     const tokens = await EmbedToken.find({ modelId }).populate('userId', 'email name');
-    const host = process.env.FRONTEND_HOST || 'http://localhost:5173';
+    const host = process.env.NODE_ENV === 'production'
+      ? (process.env.FRONTEND_URL || 'https://frontendwestern.netlify.app')
+      : (process.env.LOCAL_FRONTEND_URL || 'http://localhost:5173');
     const out = tokens.map(t => ({ token: t.token, user: t.userId, active: t.active, url: `${host}/embed?token=${t.token}`, createdAt: t.createdAt }));
     res.json(out);
   } catch (error) {
