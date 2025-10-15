@@ -28,21 +28,25 @@ function getClientIp(req) {
   }
 }
 
-// Middleware - Updated with your IP
+// CORS Configuration - Environment-based
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ? [process.env.FRONTEND_URL || 'https://your-frontend.vercel.app']
+  : [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "http://127.0.0.1:5173",
+      "http://127.0.0.1:5174",
+      "http://192.168.1.5:5173",
+      "http://192.168.1.5:5174",
+      "http://192.168.1.5:5000",
+      "http://192.168.1.7:5173",
+      "http://192.168.1.7:5174",
+      "http://192.168.1.7:3000"
+    ];
+
 app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:5174",  // New port
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",  // New port
-    "http://192.168.1.5:5173", // Current frontend IP
-    "http://192.168.1.5:5174", // Current frontend IP on new port
-    "http://192.168.1.5:5000", // Backend on same IP
-    "http://192.168.1.7:5173", // Your IP
-    "http://192.168.1.7:5174", // Your IP on new port
-    "http://192.168.1.7:3000"  // Your IP
-  ],
+  origin: allowedOrigins,
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
@@ -56,6 +60,8 @@ app.use('/models', express.static(path.join(__dirname, '../Frontend/public/model
 // Serve textures statically from backend  
 app.use('/textures', express.static(path.join(__dirname, '../Frontend/public/textures')));
 app.use('/texture', express.static(path.join(__dirname, '../Frontend/public/texture')));
+// Serve thumbnails statically from backend
+app.use('/thumbnails', express.static(path.join(__dirname, '../Frontend/public/thumbnails')));
 // Serve developer-provided JSON configs
 app.use('/configs', express.static(path.join(__dirname, '../Frontend/public/configs')));
 
@@ -1177,6 +1183,22 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
     await newModel.save();
     await newModel.populate('uploadedBy', 'name email');
 
+    // Generate thumbnail asynchronously (don't block the response)
+    const { generateThumbnail } = require('./utils/thumbnailGenerator');
+    const modelUrl = `http://localhost:5000/models/${mainFile}`;
+    
+    // Generate thumbnail in background
+    generateThumbnail(modelUrl, name).then(thumbnailFilename => {
+      if (thumbnailFilename) {
+        // Update model with thumbnail filename
+        Model.findByIdAndUpdate(newModel._id, { thumbnail: thumbnailFilename })
+          .then(() => console.log(`✅ Thumbnail saved for model: ${name}`))
+          .catch(err => console.error('❌ Failed to save thumbnail filename:', err));
+      }
+    }).catch(err => {
+      console.error('❌ Background thumbnail generation failed:', err);
+    });
+
     // Generate JSON configuration template with asset URLs
     const jsonConfigTemplate = {
       name: name || displayName,
@@ -1396,6 +1418,19 @@ app.post("/api/admin/models", authMiddleware, requireModelUploadPerm, async (req
     await newModel.save();
     // Placement/transform fields are managed via external config JSON; none are persisted here.
     await newModel.populate('uploadedBy', 'name email');
+
+    // Generate thumbnail asynchronously
+    const { generateThumbnail } = require('./utils/thumbnailGenerator');
+    
+    generateThumbnail(modelPath, name).then(thumbnailFilename => {
+      if (thumbnailFilename) {
+        Model.findByIdAndUpdate(newModel._id, { thumbnail: thumbnailFilename })
+          .then(() => console.log(`✅ Thumbnail saved for model: ${name}`))
+          .catch(err => console.error('❌ Failed to save thumbnail filename:', err));
+      }
+    }).catch(err => {
+      console.error('❌ Background thumbnail generation failed:', err);
+    });
 
     console.log('=== MODEL SAVED ===');
     console.log('Model ID:', newModel._id);

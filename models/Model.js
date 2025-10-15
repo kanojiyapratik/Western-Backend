@@ -12,6 +12,7 @@ const ModelSchema = new mongoose.Schema({
   assets: { type: mongoose.Schema.Types.Mixed },
   metadata: { type: mongoose.Schema.Types.Mixed },
   uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  thumbnail: { type: String }, // Thumbnail filename
   camera: { type: mongoose.Schema.Types.Mixed },
   lights: { type: [mongoose.Schema.Types.Mixed], default: [] },
   hiddenInitially: { type: [String], default: [] },

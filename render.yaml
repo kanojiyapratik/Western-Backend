@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: 3d-configurator-backend
+    env: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        fromDatabase:
+          name: 3d-configurator-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        value: https://your-frontend.vercel.app
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: FROM_EMAIL
+        value: noreply@yourdomain.com
+
+databases:
+  - name: 3d-configurator-db
+    databaseName: 3dconfigurator
+    user: admin
