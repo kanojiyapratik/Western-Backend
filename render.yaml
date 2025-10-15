@@ -15,7 +15,7 @@ services:
       - key: FRONTEND_URL
         value: https://frontendwestern.netlify.app
       - key: SENDGRID_API_KEY
-        value: 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
+        sync: false
       - key: EMAIL_FROM
         value: "3D Configurator <pratikkanojiya9324@gmail.com>"
       - key: REPLY_TO
