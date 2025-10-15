@@ -464,7 +464,7 @@ const ensureDefaultAccounts = async () => {
     await ensureAccount({
       email: "user@example.com",
       name: "Demo User",
-      role: "user",
+      role: "employee",
       password: "user123",
       permissions: fullPermissions
     });
