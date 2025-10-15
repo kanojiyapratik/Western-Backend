@@ -30,7 +30,10 @@ function getClientIp(req) {
 
 // CORS Configuration - Environment-based
 const allowedOrigins = process.env.NODE_ENV === 'production' 
-  ? [process.env.FRONTEND_URL || 'https://your-frontend.vercel.app']
+  ? [
+      process.env.FRONTEND_URL || 'https://your-frontend.vercel.app',
+      'https://frontendwestern.netlify.app'
+    ]
   : [
       "http://localhost:3000",
       "http://localhost:5173",
