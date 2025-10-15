@@ -31,8 +31,8 @@ function getClientIp(req) {
 // CORS Configuration - Environment-based
 const allowedOrigins = process.env.NODE_ENV === 'production' 
   ? [
-      process.env.FRONTEND_URL || 'https://your-frontend.vercel.app',
-      'https://frontendwestern.netlify.app'
+      'https://frontendwestern.netlify.app',
+      process.env.FRONTEND_URL || 'https://frontendwestern.netlify.app'
     ]
   : [
       "http://localhost:3000",
@@ -48,8 +48,20 @@ const allowedOrigins = process.env.NODE_ENV === 'production'
       "http://192.168.1.7:3000"
     ];
 
+console.log('🌐 CORS Origins:', allowedOrigins);
+
 app.use(cors({
-  origin: allowedOrigins,
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.warn('🚫 CORS blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
