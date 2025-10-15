@@ -9,7 +9,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: MONGO_URI
-        value: mongodb+srv://pratikkanojiya:Ph9819740701@cluster0.fveoutd.mongodb.net/laundrydb?retryWrites=true&w=majority
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: FRONTEND_URL
