@@ -1141,11 +1141,15 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
     // Build assets object from uploaded files with full URLs
     const assets = {};
     const assetUrls = {};
+    const baseUrl = process.env.NODE_ENV === 'production' 
+      ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+      : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000');
+    
     ['base', 'doors', 'drawers', 'glassDoors', 'other'].forEach(key => {
       if (req.files && req.files[key] && req.files[key][0]) {
         const filename = req.files[key][0].filename;
         assets[key] = filename;
-        assetUrls[key] = `http://localhost:5000/models/${filename}`;
+        assetUrls[key] = `${baseUrl}/models/${filename}`;
         console.log(`Asset registered: ${key} -> ${filename}`);
       } else {
         console.log(`Asset missing: ${key}`);
@@ -1196,7 +1200,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
 
     // Generate thumbnail asynchronously (don't block the response)
     const { generateThumbnail } = require('./utils/thumbnailGenerator');
-    const modelUrl = `http://localhost:5000/models/${mainFile}`;
+    const modelUrl = `${baseUrl}/models/${mainFile}`;
     
     // Generate thumbnail in background
     generateThumbnail(modelUrl, name).then(thumbnailFilename => {
@@ -1308,7 +1312,10 @@ app.post("/api/upload", authMiddleware, requireModelUploadPerm, upload.single('f
     }
 
     // Return the file path
-    const filePath = `http://localhost:5000/models/${req.file.filename}`;
+    const baseUrl = process.env.NODE_ENV === 'production' 
+      ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+      : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000');
+    const filePath = `${baseUrl}/models/${req.file.filename}`;
     res.status(200).json({
       message: "File uploaded successfully",
       path: filePath,
@@ -2049,8 +2056,10 @@ const HOST = '0.0.0.0'; // Always listen on all interfaces
 app.listen(PORT, HOST, () => {
   console.log(`🚀 Backend running on http://${HOST}:${PORT}`);
   console.log(`🌐 Local access: http://localhost:${PORT}`);
-  console.log(`🌐 Network access: http://192.168.1.7:${PORT}`);
-  console.log(`🌐 Health check: http://192.168.1.7:${PORT}/api/health`);
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`🌐 Network access: http://192.168.1.7:${PORT}`);
+    console.log(`🌐 Health check: http://192.168.1.7:${PORT}/api/health`);
+  }
 });
 
 // Express global error handler (handles request aborted and other body parse errors)
