@@ -39,6 +39,7 @@ const authMiddleware = (allowedRoles = [], requiredPermission = null) => {
         console.log('Specific permission value:', user.permissions?.[requiredPermission]);
       }
       
+      // Allow access if user has required role OR required permission
       if (!hasRole && !hasPermission) {
         console.log('=== ACCESS DENIED ===');
         console.log('User:', user.name, 'tried to access with roles:', allowedRoles, 'permission:', requiredPermission);

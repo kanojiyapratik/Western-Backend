@@ -4,8 +4,8 @@ const router = express.Router();
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 
-// Get all users (admin only or userManagement permission)
-router.get("/users", authMiddleware(["admin"], "userManagement"), async (req, res) => {
+// Get all users (admin/superadmin only or userManagement permission)
+router.get("/users", authMiddleware(["admin", "superadmin"], "userManagement"), async (req, res) => {
   try {
     const users = await User.find({}, { password: 0 });
     console.log('🔍 DEBUG: Total users in DB:', users.length);
