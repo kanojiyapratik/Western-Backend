@@ -7,6 +7,9 @@ const authMiddleware = require("../middleware/authMiddleware");
 // Get all users (admin/superadmin only or userManagement permission)
 router.get("/users", authMiddleware(["admin", "superadmin"], "userManagement"), async (req, res) => {
   try {
+    console.log('🔍 DEBUG: MongoDB connection string:', process.env.MONGO_URI?.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'));
+    console.log('🔍 DEBUG: Database name:', User.db.databaseName);
+    console.log('🔍 DEBUG: Collection name:', User.collection.collectionName);
     const users = await User.find({}, { password: 0 });
     console.log('🔍 DEBUG: Total users in DB:', users.length);
     console.log('🔍 DEBUG: User emails:', users.map(u => u.email));
