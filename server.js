@@ -2074,7 +2074,7 @@ app.get('/api/debug/mailer-status', (req, res) => {
 const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0'; // Always listen on all interfaces
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`🚀 Backend running on http://${HOST}:${PORT}`);
   console.log(`🌐 Local access: http://localhost:${PORT}`);
   if (process.env.NODE_ENV !== 'production') {
@@ -2082,6 +2082,9 @@ app.listen(PORT, HOST, () => {
     console.log(`🌐 Health check: http://192.168.1.7:${PORT}/api/health`);
   }
 });
+
+// Handle deployment timeouts
+server.timeout = 30000;
 
 // Express global error handler (handles request aborted and other body parse errors)
 app.use((err, req, res, next) => {
