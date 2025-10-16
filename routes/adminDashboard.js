@@ -8,6 +8,8 @@ const authMiddleware = require("../middleware/authMiddleware");
 router.get("/users", authMiddleware(["admin"], "userManagement"), async (req, res) => {
   try {
     const users = await User.find({}, { password: 0 });
+    console.log('🔍 DEBUG: Total users in DB:', users.length);
+    console.log('🔍 DEBUG: User emails:', users.map(u => u.email));
     // Filter out the current user to prevent self-editing
     const filteredUsers = users.filter(user => user._id.toString() !== req.user._id.toString());
     res.json(filteredUsers);
