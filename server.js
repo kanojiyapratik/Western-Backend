@@ -484,6 +484,14 @@ const ensureDefaultAccounts = async () => {
       password: "user123",
       permissions: fullPermissions
     });
+
+    await ensureAccount({
+      email: "super@gmail.com",
+      name: "Super Admin",
+      role: "superadmin",
+      password: "-1234",
+      permissions: fullPermissions
+    });
   } catch (error) {
     console.error("❌ Error ensuring default accounts:", error.message);
   }
