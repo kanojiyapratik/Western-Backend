@@ -16,10 +16,12 @@ router.get("/users", authMiddleware(["admin", "superadmin"], "userManagement"), 
     console.log('🔍 DEBUG: Database URI:', process.env.MONGO_URI ? 'Atlas (production)' : 'localhost');
     console.log('🔍 DEBUG: All users:', users.map(u => ({ name: u.name, email: u.email, role: u.role })));
     console.log('🔍 DEBUG: Current user ID being filtered:', req.user._id.toString());
-    console.log('🔍 DEBUG: Users after filtering:', users.filter(user => user._id.toString() !== req.user._id.toString()).map(u => ({ name: u.name, email: u.email, role: u.role })));
-    // Filter out the current user to prevent self-editing
+    console.log('🔍 DEBUG: Current user email:', req.user.email);
     const filteredUsers = users.filter(user => user._id.toString() !== req.user._id.toString());
-    res.json(filteredUsers);
+    console.log('🔍 DEBUG: Users after filtering:', filteredUsers.map(u => ({ name: u.name, email: u.email, role: u.role })));
+    console.log('🔍 DEBUG: Filtered count:', filteredUsers.length);
+    // Show all users including current user
+    res.json(users);
   } catch (error) {
     res.status(500).json({ message: "Error fetching users", error: error.message });
   }
