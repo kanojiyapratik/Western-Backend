@@ -7,8 +7,24 @@ const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const ActivityLog = require("./models/ActivityLog");
+const cloudinary = require('cloudinary').v2;
+
+// Load environment variables first
 require("dotenv").config();
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+console.log('Cloudinary configured with:', {
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'missing',
+  api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
+  api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
+});
+const ActivityLog = require("./models/ActivityLog");
 const { sendEmbedEmail } = require("./utils/mailer");
 
 const app = express();
@@ -260,52 +276,107 @@ async function performModelDeletion(model) {
   const report = { deleted: [], notFound: [], errors: [] };
   
   try {
-    // Collect all assets
-    const allAssets = collectAssetStrings(model);
+    const { deleteFromCloudinary } = require('./utils/cloudinaryUpload');
     
-    // Add main file
-    if (model.file) {
-      allAssets.models.add(model.file);
+    // Delete main file from Cloudinary if it's a Cloudinary URL
+    if (model.path && model.path.includes('cloudinary.com')) {
+      try {
+        // Extract public_id from Cloudinary URL
+        // URL format: https://res.cloudinary.com/cloud/image/upload/v123/folder/filename.ext
+        const urlParts = model.path.split('/');
+        // Find the part after 'upload/v{version}/' which contains folder/filename
+        const uploadIndex = urlParts.findIndex(part => part.startsWith('v') && /^v\d+$/.test(part));
+        let fullPublicId;
+        if (uploadIndex !== -1 && uploadIndex + 1 < urlParts.length) {
+          // Get everything after version (folder/filename.ext)
+          const pathAfterVersion = urlParts.slice(uploadIndex + 1).join('/');
+          fullPublicId = pathAfterVersion.replace(/\.[^.]+$/, ''); // remove extension
+        } else {
+          // Fallback to old method
+          const fileWithExt = urlParts[urlParts.length - 1];
+          fullPublicId = `models/${fileWithExt.split('.')[0]}`;
+        }
+        console.log(`Model data:`, { file: model.file, path: model.path });
+        console.log(`Extracted public_id: ${fullPublicId}`);
+        
+        // Check all files in Cloudinary (both raw and image types)
+        try {
+          const cloudinary = require('cloudinary').v2;
+          
+          // Check RAW files
+          const rawResult = await cloudinary.api.resources({
+            type: 'upload',
+            resource_type: 'raw',
+            max_results: 20
+          });
+          console.log('All RAW files in Cloudinary:', rawResult.resources.map(r => ({ public_id: r.public_id, url: r.secure_url })));
+          
+          // Check IMAGE files
+          const imageResult = await cloudinary.api.resources({
+            type: 'upload',
+            resource_type: 'image',
+            max_results: 20
+          });
+          console.log('All IMAGE files in Cloudinary:', imageResult.resources.map(r => ({ public_id: r.public_id, url: r.secure_url })));
+          
+          // Try to find our specific file
+          const allFiles = [...rawResult.resources, ...imageResult.resources];
+          const matchingFile = allFiles.find(f => f.public_id === fullPublicId);
+          console.log('Matching file found:', matchingFile ? { public_id: matchingFile.public_id, resource_type: matchingFile.resource_type, url: matchingFile.secure_url } : 'NOT FOUND');
+          
+        } catch (err) {
+          console.log('Could not list Cloudinary files:', err.message);
+        }
+        
+        console.log(`Deleting from Cloudinary: ${fullPublicId}`);
+        console.log(`URL analysis: ${model.path}`);
+        console.log(`URL parts:`, model.path.split('/'));
+        const deleteResult = await deleteFromCloudinary(fullPublicId, 'image');
+        if (deleteResult.success) {
+          report.deleted.push(`cloudinary/${fullPublicId}`);
+        } else {
+          report.errors.push(`Failed to delete from Cloudinary: ${deleteResult.error}`);
+        }
+      } catch (err) {
+        report.errors.push(`Cloudinary deletion error: ${err.message}`);
+      }
     }
     
-    // Add config if local
+    // Delete assets from Cloudinary
+    if (model.assets && typeof model.assets === 'object') {
+      for (const [key, assetUrl] of Object.entries(model.assets)) {
+        if (assetUrl && assetUrl.includes('cloudinary.com')) {
+          try {
+            // Extract public_id from Cloudinary URL
+            const urlParts = assetUrl.split('/');
+            const fileWithExt = urlParts[urlParts.length - 1];
+            const publicId = fileWithExt.split('.')[0];
+            const fullPublicId = `models/${publicId}`;
+            
+            console.log(`Deleting asset from Cloudinary: ${fullPublicId}`);
+            const deleteResult = await deleteFromCloudinary(fullPublicId, 'image');
+            if (deleteResult.success) {
+              report.deleted.push(`cloudinary/${fullPublicId}`);
+            } else {
+              report.errors.push(`Failed to delete asset from Cloudinary: ${deleteResult.error}`);
+            }
+          } catch (err) {
+            report.errors.push(`Asset deletion error: ${err.message}`);
+          }
+        }
+      }
+    }
+    
+    // Delete local config file if exists
     if (model.configUrl && typeof model.configUrl === 'string' && model.configUrl.startsWith('/configs/')) {
       const configRel = model.configUrl.substring(9);
-      allAssets.configs.add(configRel);
-    }
-    
-    // Delete files
-    const baseDir = path.join(__dirname, '../Frontend/public');
-    
-    for (const [type, files] of Object.entries(allAssets)) {
-      const dirName = type === 'texture' ? 'texture' : type;
-      const dirPath = path.join(baseDir, dirName);
-      
-      for (const file of files) {
-        const filePath = path.join(dirPath, file);
-        
-        // Try direct path
-        if (fs.existsSync(filePath)) {
-          try {
-            fs.unlinkSync(filePath);
-            report.deleted.push(`${type}/${file}`);
-          } catch (err) {
-            report.errors.push(`Failed to delete ${type}/${file}: ${err.message}`);
-          }
-        } else {
-          // Try basename in models dir (fallback for malformed paths)
-          const basename = path.basename(file);
-          const fallbackPath = path.join(baseDir, 'models', basename);
-          if (fs.existsSync(fallbackPath)) {
-            try {
-              fs.unlinkSync(fallbackPath);
-              report.deleted.push(`models/${basename} (fallback)`);
-            } catch (err) {
-              report.errors.push(`Failed to delete models/${basename}: ${err.message}`);
-            }
-          } else {
-            report.notFound.push(`${type}/${file}`);
-          }
+      const configPath = path.join(__dirname, '../Frontend/public/configs', configRel);
+      if (fs.existsSync(configPath)) {
+        try {
+          fs.unlinkSync(configPath);
+          report.deleted.push(`configs/${configRel}`);
+        } catch (err) {
+          report.errors.push(`Failed to delete config: ${err.message}`);
         }
       }
     }
@@ -1023,7 +1094,7 @@ app.get("/api/models", async (req, res) => {
         id: model._id,
         name: model.name,
         displayName: model.displayName,
-        file: `${process.env.NODE_ENV === 'production' 
+        file: model.path || `${process.env.NODE_ENV === 'production' 
           ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
           : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000')}/models/${model.file}`,
         section: model.section || 'Upright Counter',
@@ -1159,26 +1230,51 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
     console.log('Parsed Interaction Groups:', parsedInteractionGroups);
     console.log('Parsed Metadata:', parsedMetadata);
 
-    // Build assets object from uploaded files with full URLs
+    // Upload files to Cloudinary
+    const { uploadToCloudinary } = require('./utils/cloudinaryUpload');
     const assets = {};
     const assetUrls = {};
-    const baseUrl = process.env.NODE_ENV === 'production' 
-      ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
-      : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000');
     
-    ['base', 'doors', 'drawers', 'glassDoors', 'other'].forEach(key => {
-      if (req.files && req.files[key] && req.files[key][0]) {
-        const filename = req.files[key][0].filename;
-        assets[key] = filename;
-        assetUrls[key] = `${baseUrl}/models/${filename}`;
-        console.log(`Asset registered: ${key} -> ${filename}`);
-      } else {
-        console.log(`Asset missing: ${key}`);
+    try {
+      for (const key of ['base', 'doors', 'drawers', 'glassDoors', 'other']) {
+        if (req.files && req.files[key] && req.files[key][0]) {
+          const file = req.files[key][0];
+          console.log(`Uploading ${key} file: ${file.path}`);
+          console.log('Cloudinary config:', {
+            cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+            api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
+            api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
+          });
+          
+          const uploadResult = await uploadToCloudinary(file.path, {
+            folder: 'models',
+            public_id: `${name}_${key}`
+          });
+          
+          if (uploadResult.success) {
+            assets[key] = uploadResult.public_id;
+            assetUrls[key] = uploadResult.url;
+            console.log(`Asset uploaded to Cloudinary: ${key} -> ${uploadResult.url}`);
+          } else {
+            console.error(`Failed to upload ${key}:`, uploadResult.error);
+            return res.status(500).json({ 
+              message: `Failed to upload ${key} file to Cloudinary`, 
+              error: uploadResult.error 
+            });
+          }
+        }
       }
-    });
+    } catch (error) {
+      console.error('Cloudinary upload error:', error);
+      return res.status(500).json({ 
+        message: 'Cloudinary upload failed', 
+        error: error.message 
+      });
+    }
 
     // Use base as main file if present
-    const mainFile = assets.base || (req.files && req.files.base && req.files.base[0] && req.files.base[0].filename);
+    const mainFile = assets.base;
+    const mainFileUrl = assetUrls.base;
     if (!mainFile) {
       console.error('No base model file uploaded.');
       return res.status(400).json({ message: "No base model file uploaded" });
@@ -1205,10 +1301,10 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
     const newModel = new Model({
       name,
       displayName,
-      path: `/models/${mainFile}`,
+      path: mainFileUrl,
       file: mainFile,
       type,
-      assets,
+      assets: assetUrls, // Store Cloudinary URLs
       interactionGroups: parsedInteractionGroups,
       metadata: parsedMetadata,
       uploadedBy: req.user._id,
@@ -1219,27 +1315,13 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
     await newModel.save();
     await newModel.populate('uploadedBy', 'name email');
 
-    // Generate thumbnail asynchronously (don't block the response)
-    const { generateThumbnail } = require('./utils/thumbnailGenerator');
-    const modelUrl = `${baseUrl}/models/${mainFile}`;
-    
-    // Generate thumbnail in background
-    generateThumbnail(modelUrl, name).then(thumbnailFilename => {
-      if (thumbnailFilename) {
-        // Update model with thumbnail filename
-        Model.findByIdAndUpdate(newModel._id, { thumbnail: thumbnailFilename })
-          .then(() => console.log(`✅ Thumbnail saved for model: ${name}`))
-          .catch(err => console.error('❌ Failed to save thumbnail filename:', err));
-      }
-    }).catch(err => {
-      console.error('❌ Background thumbnail generation failed:', err);
-    });
+    // Thumbnail generation removed
 
     // Generate JSON configuration template with asset URLs
     const jsonConfigTemplate = {
       name: name || displayName,
-      path: `/models/${mainFile}`,
-      assets: Object.fromEntries(Object.entries(assets).map(([k, v]) => [k, `/models/${v}`])),
+      path: mainFileUrl,
+      assets: assetUrls,
       camera: {
         position: [0, 2, 5],
         target: [0, 1, 0],
@@ -1325,32 +1407,44 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
   }
 });
 
-// Simple file upload endpoint (just uploads file, no model creation)
+// Simple file upload endpoint (uploads to Cloudinary)
 app.post("/api/upload", authMiddleware, requireModelUploadPerm, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    // Return the file path
-    const baseUrl = process.env.NODE_ENV === 'production' 
-      ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
-      : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000');
-    const filePath = `${baseUrl}/models/${req.file.filename}`;
-    res.status(200).json({
-      message: "File uploaded successfully",
-      path: filePath,
-      filename: req.file.filename
+    console.log('Uploading file to Cloudinary:', req.file.path);
+    console.log('Cloudinary config check:', {
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'missing',
+      api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
+      api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
     });
+
+    // Upload to Cloudinary
+    const { uploadToCloudinary } = require('./utils/cloudinaryUpload');
+    const uploadResult = await uploadToCloudinary(req.file.path, {
+      folder: 'models',
+      public_id: `single_${Date.now()}`
+    });
+    
+    console.log('Cloudinary upload result:', uploadResult);
+    
+    if (uploadResult.success) {
+      res.status(200).json({
+        message: "File uploaded successfully",
+        path: uploadResult.url,
+        filename: uploadResult.public_id
+      });
+    } else {
+      console.error('Cloudinary upload failed:', uploadResult.error);
+      res.status(500).json({ 
+        message: "Failed to upload to Cloudinary", 
+        error: uploadResult.error 
+      });
+    }
   } catch (error) {
     console.error("File upload error:", error);
-    // Clean up uploaded file on error
-    if (req.file) {
-      const fileToDelete = path.join(__dirname, '../Frontend/public/models', req.file.filename);
-      if (fs.existsSync(fileToDelete)) {
-        fs.unlinkSync(fileToDelete);
-      }
-    }
     res.status(500).json({ message: "Error uploading file", error: error.message });
   }
 });
@@ -1458,18 +1552,7 @@ app.post("/api/admin/models", authMiddleware, requireModelUploadPerm, async (req
     // Placement/transform fields are managed via external config JSON; none are persisted here.
     await newModel.populate('uploadedBy', 'name email');
 
-    // Generate thumbnail asynchronously
-    const { generateThumbnail } = require('./utils/thumbnailGenerator');
-    
-    generateThumbnail(modelPath, name).then(thumbnailFilename => {
-      if (thumbnailFilename) {
-        Model.findByIdAndUpdate(newModel._id, { thumbnail: thumbnailFilename })
-          .then(() => console.log(`✅ Thumbnail saved for model: ${name}`))
-          .catch(err => console.error('❌ Failed to save thumbnail filename:', err));
-      }
-    }).catch(err => {
-      console.error('❌ Background thumbnail generation failed:', err);
-    });
+    // Thumbnail generation removed
 
     console.log('=== MODEL SAVED ===');
     console.log('Model ID:', newModel._id);
@@ -1986,7 +2069,7 @@ app.get('/api/public/model/:id', async (req, res) => {
       id: model._id,
       name: model.name,
       displayName: model.displayName,
-      file: `${process.env.NODE_ENV === 'production' 
+      file: model.path || `${process.env.NODE_ENV === 'production' 
         ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
         : (process.env.LOCAL_BACKEND_URL || 'http://192.168.1.7:5000')}/models/${model.file}`,
       section: model.section || 'Upright Counter',
@@ -2316,6 +2399,38 @@ app.get('/api/activity/export', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('Activity export error:', err);
     if (!res.headersSent) res.status(500).json({ message: 'Error exporting activity logs', error: err.message });
+  }
+});
+
+// Cloudinary cleanup endpoints
+app.get('/api/admin/cloudinary/files', authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { getCloudinaryFiles } = require('./utils/cloudinaryCleanup');
+    const files = await getCloudinaryFiles();
+    res.json({ files, count: files.length });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching Cloudinary files', error: error.message });
+  }
+});
+
+app.post('/api/admin/cloudinary/cleanup', authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { cleanupOrphanedFiles } = require('./utils/cloudinaryCleanup');
+    const report = await cleanupOrphanedFiles(Model);
+    res.json(report);
+  } catch (error) {
+    res.status(500).json({ message: 'Error cleaning up files', error: error.message });
+  }
+});
+
+app.delete('/api/admin/cloudinary/file/:publicId', authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { deleteCloudinaryFile } = require('./utils/cloudinaryCleanup');
+    const publicId = decodeURIComponent(req.params.publicId);
+    const result = await deleteCloudinaryFile(publicId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting file', error: error.message });
   }
 });
 
