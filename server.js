@@ -45,25 +45,27 @@ function getClientIp(req) {
 }
 
 // CORS Configuration - Environment-based
-const allowedOrigins = process.env.NODE_ENV === 'production' 
-  ? [
-      'https://frontendwestern.netlify.app',
-      'https://western-frontend.vercel.app',
-      process.env.FRONTEND_URL || 'https://frontendwestern.netlify.app'
-    ]
-  : [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://127.0.0.1:5173",
-      "http://127.0.0.1:5174",
-      "http://192.168.1.5:5173",
-      "http://192.168.1.5:5174",
-      "http://192.168.1.5:5000",
-      "http://192.168.1.7:5173",
-      "http://192.168.1.7:5174",
-      "http://192.168.1.7:3000"
-    ];
+const allowedOrigins = [
+  // Production origins
+  'https://frontendwestern.netlify.app',
+  'https://western-frontend.vercel.app',
+  // Development origins
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
+  "http://192.168.1.5:5173",
+  "http://192.168.1.5:5174",
+  "http://192.168.1.5:5000",
+  "http://192.168.1.7:5173",
+  "http://192.168.1.7:5174",
+  "http://192.168.1.7:3000"
+];
+
+if (process.env.FRONTEND_URL) {
+  allowedOrigins.push(process.env.FRONTEND_URL);
+}
 
 console.log('🌐 CORS Origins:', allowedOrigins);
 
@@ -1438,9 +1440,19 @@ app.post("/api/upload", authMiddleware, requireModelUploadPerm, upload.single('f
       });
     } else {
       console.error('Cloudinary upload failed:', uploadResult.error);
+      console.error('Cloudinary config status:', {
+        cloud_name: process.env.CLOUDINARY_CLOUD_NAME ? 'present' : 'missing',
+        api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing', 
+        api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
+      });
       res.status(500).json({ 
         message: "Failed to upload to Cloudinary", 
-        error: uploadResult.error 
+        error: uploadResult.error,
+        debug: {
+          hasCloudName: !!process.env.CLOUDINARY_CLOUD_NAME,
+          hasApiKey: !!process.env.CLOUDINARY_API_KEY,
+          hasApiSecret: !!process.env.CLOUDINARY_API_SECRET
+        }
       });
     }
   } catch (error) {
