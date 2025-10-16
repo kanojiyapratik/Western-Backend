@@ -33,7 +33,7 @@ const allowedOrigins = process.env.NODE_ENV === 'production'
   ? [
       'https://frontendwestern.netlify.app',
       'https://western-frontend.vercel.app',
-      process.env.FRONTEND_URL || 'https://frontendwestern.netlify.app'
+      process.env.FRONTEND_URL || 'https://western-frontend.vercel.app'
     ]
   : [
       "http://localhost:3000",
