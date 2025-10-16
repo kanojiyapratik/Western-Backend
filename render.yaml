@@ -13,7 +13,7 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: FRONTEND_URL
-        value: https://frontendwestern.netlify.app
+        value: https://western-frontend.vercel.app
       - key: SENDGRID_API_KEY
         sync: false
       - key: EMAIL_FROM
