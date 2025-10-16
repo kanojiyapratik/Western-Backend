@@ -1084,10 +1084,10 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-// Allow model management (list/view) if admin OR any model-management permission
+// Allow model management (list/view) if admin/superadmin OR any model-management permission
 const requireModelManager = (req, res, next) => {
   if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
-  if (req.user.role === 'admin') return next();
+  if (req.user.role === 'admin' || req.user.role === 'superadmin') return next();
   const p = req.user.permissions || {};
   if (p.modelUpload || p.modelManageUpload || p.modelManageEdit || p.modelManageDelete) return next();
   return res.status(403).json({ message: 'Model management permission required' });
@@ -1096,7 +1096,7 @@ const requireModelManager = (req, res, next) => {
 // Action-specific permissions (legacy modelUpload implies all)
 const requireModelUploadPerm = (req, res, next) => {
   if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
-  if (req.user.role === 'admin') return next();
+  if (req.user.role === 'admin' || req.user.role === 'superadmin') return next();
   const p = req.user.permissions || {};
   // Only granular flag allows upload; master enables view-only
   if (p.modelManageUpload) return next();
@@ -1105,7 +1105,7 @@ const requireModelUploadPerm = (req, res, next) => {
 
 const requireModelEditPerm = (req, res, next) => {
   if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
-  if (req.user.role === 'admin') return next();
+  if (req.user.role === 'admin' || req.user.role === 'superadmin') return next();
   const p = req.user.permissions || {};
   if (p.modelManageEdit) return next();
   return res.status(403).json({ message: 'Edit permission required' });
@@ -1113,7 +1113,7 @@ const requireModelEditPerm = (req, res, next) => {
 
 const requireModelDeletePerm = (req, res, next) => {
   if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
-  if (req.user.role === 'admin') return next();
+  if (req.user.role === 'admin' || req.user.role === 'superadmin') return next();
   const p = req.user.permissions || {};
   if (p.modelManageDelete) return next();
   return res.status(403).json({ message: 'Delete permission required' });

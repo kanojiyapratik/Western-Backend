@@ -26,7 +26,7 @@ router.get("/users", authMiddleware(["admin", "superadmin"], "userManagement"), 
 });
 
 // Update user permissions
-router.put("/users/:id/permissions", authMiddleware(["admin"], "userManageEdit"), async (req, res) => {
+router.put("/users/:id/permissions", authMiddleware(["admin", "superadmin"], "userManageEdit"), async (req, res) => {
   try {
     const { permissions, role, customRoleName } = req.body;
     console.log('=== BACKEND UPDATE DEBUG ===');
@@ -102,7 +102,7 @@ router.put("/users/:id/permissions", authMiddleware(["admin"], "userManageEdit")
 // Note: Active/Inactive user status removed from the system.
 
 // Delete user
-router.delete("/users/:id", authMiddleware(["admin"], "userManageDelete"), async (req, res) => {
+router.delete("/users/:id", authMiddleware(["admin", "superadmin"], "userManageDelete"), async (req, res) => {
   try {
     const user = await User.findByIdAndDelete(req.params.id);
     if (!user) {
@@ -115,8 +115,8 @@ router.delete("/users/:id", authMiddleware(["admin"], "userManageDelete"), async
   }
 });
 
-// Create new user (admin only or userManageCreate permission)
-router.post("/users", authMiddleware(["admin"], "userManageCreate"), async (req, res) => {
+// Create new user (admin/superadmin only or userManageCreate permission)
+router.post("/users", authMiddleware(["admin", "superadmin"], "userManageCreate"), async (req, res) => {
   try {
     const { name, email, password, role = 'employee', permissions = {} } = req.body;
 
