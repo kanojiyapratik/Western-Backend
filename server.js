@@ -734,7 +734,7 @@ app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
-  res.json({ status: "OK", message: "Server is running" });
+  res.json({ status: "OK", message: "Server is running", timestamp: new Date().toISOString() });
 });
 
 // Note: Admin dashboard routes are now handled by /routes/adminDashboard.js with proper permission-based access control
