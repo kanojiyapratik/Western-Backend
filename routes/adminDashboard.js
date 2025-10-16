@@ -10,6 +10,8 @@ router.get("/users", authMiddleware(["admin", "superadmin"], "userManagement"), 
     const users = await User.find({}, { password: 0 });
     console.log('🔍 DEBUG: Total users in DB:', users.length);
     console.log('🔍 DEBUG: User emails:', users.map(u => u.email));
+    console.log('🔍 DEBUG: Database URI:', process.env.MONGO_URI ? 'Atlas (production)' : 'localhost');
+    console.log('🔍 DEBUG: All users:', users.map(u => ({ name: u.name, email: u.email, role: u.role })));
     // Filter out the current user to prevent self-editing
     const filteredUsers = users.filter(user => user._id.toString() !== req.user._id.toString());
     res.json(filteredUsers);
