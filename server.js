@@ -1044,7 +1044,12 @@ const modelManagementRoutes = require('./routes/modelManagement');
 app.use(modelManagementRoutes);
 app.get("/api/models", async (req, res) => {
   try {
+    console.log('=== MODELS API REQUEST ===');
+    const allModels = await Model.find({}).select('name status createdAt');
+    console.log('All models in DB:', allModels.map(m => ({ name: m.name, status: m.status, created: m.createdAt })));
+    
     const models = await Model.find({ status: 'active' }).select('-uploadedBy -createdAt -updatedAt');
+    console.log('Active models found:', models.length);
     
     // Convert to format expected by frontend
     const formattedModels = models.map(model => {
@@ -1306,6 +1311,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       path: mainFileUrl,
       file: mainFile,
       type,
+      status: 'active', // Ensure model is active
       assets: assetUrls, // Store Cloudinary URLs
       interactionGroups: parsedInteractionGroups,
       metadata: parsedMetadata,
@@ -1554,6 +1560,7 @@ app.post("/api/admin/models", authMiddleware, requireModelUploadPerm, async (req
       path: modelPath,
       file: filename,
       type: 'glb',
+      status: 'active', // Ensure model is active
       configUrl: sanitizedConfigUrl,
       assets: assets, // Add assets field
       uploadedBy: req.user._id,
