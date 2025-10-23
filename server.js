@@ -49,18 +49,27 @@ const allowedOrigins = [
   // Production origins
   'https://frontendwestern.netlify.app',
   'https://western-frontend.vercel.app',
-  // Development origins
+  // Development origins - comprehensive localhost variations
   "http://localhost:3000",
   "http://localhost:5173",
   "http://localhost:5174",
+  "http://localhost:5000",
+  "http://127.0.0.1:3000",
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5174",
+  "http://127.0.0.1:5000",
+  // Network IPs for development
   "http://192.168.1.5:5173",
   "http://192.168.1.5:5174",
   "http://192.168.1.5:5000",
   "http://192.168.1.7:5173",
   "http://192.168.1.7:5174",
-  "http://192.168.1.7:3000"
+  "http://192.168.1.7:3000",
+  "http://192.168.1.7:5000",
+  "http://192.168.1.8:5173",
+  "http://192.168.1.8:5174",
+  "http://192.168.1.8:3000",
+  "http://192.168.1.8:5000"
 ];
 
 if (process.env.FRONTEND_URL) {

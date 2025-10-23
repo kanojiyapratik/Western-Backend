@@ -23,6 +23,6 @@ services:
       - key: BACKEND_URL
         value: https://threed-configurator-backend-7pwk.onrender.com
       - key: LOCAL_BACKEND_URL
-        value: http://192.168.1.7:5000
+        value: http://localhost:5000
       - key: LOCAL_FRONTEND_URL
-        value: http://192.168.1.7:5173
+        value: http://localhost:5173
