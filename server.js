@@ -1080,11 +1080,22 @@ app.get("/api/models", async (req, res) => {
       const normalizeAssetPath = (p) => {
         if (!p || typeof p !== 'string') return undefined;
         if (p.startsWith('http://') || p.startsWith('https://')) return p;
-        const baseUrl = process.env.NODE_ENV === 'production' 
+        const baseUrl = process.env.NODE_ENV === 'production'
           ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
           : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000');
         if (p.startsWith('/models/')) return `${baseUrl}${p}`;
-        // treat as filename
+        // treat as filename - only add /models/ prefix if it's not already a full URL
+        return `${baseUrl}/models/${p}`;
+      };
+
+      // For localhost development, ensure Cloudinary URLs are used directly without modification
+      const normalizeAssetPathDev = (p) => {
+        if (!p || typeof p !== 'string') return undefined;
+        if (p.startsWith('http://') || p.startsWith('https://')) return p; // Cloudinary URLs stay as-is
+        const baseUrl = process.env.NODE_ENV === 'production'
+          ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+          : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000');
+        if (p.startsWith('/models/')) return `${baseUrl}${p}`;
         return `${baseUrl}/models/${p}`;
       };
       const assetsRaw = model.assets || undefined;
@@ -1110,9 +1121,10 @@ app.get("/api/models", async (req, res) => {
         id: model._id,
         name: model.name,
         displayName: model.displayName,
-        file: model.path || `${process.env.NODE_ENV === 'production' 
-          ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
-          : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000')}/models/${model.file}`,
+        file: model.path && model.path.includes('cloudinary.com') ? model.path :
+          (process.env.NODE_ENV === 'production'
+            ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
+            : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000')) + (model.file && model.file.startsWith('/models/') ? model.file : `/models/${model.file || ''}`),
         section: model.section || 'Upright Counter',
         type: model.type,
         // Fallback to metadata.configUrl for legacy/older records
@@ -1318,7 +1330,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       name,
       displayName,
       path: mainFileUrl,
-      file: mainFile,
+      file: mainFile, // Store the public_id without extension
       type,
       status: 'active', // Ensure model is active
       assets: assetUrls, // Store Cloudinary URLs
@@ -1567,7 +1579,7 @@ app.post("/api/admin/models", authMiddleware, requireModelUploadPerm, async (req
       name,
       displayName: name,
       path: modelPath,
-      file: filename,
+      file: filename, // Store the filename as-is (Cloudinary URL or local path)
       type: 'glb',
       status: 'active', // Ensure model is active
       configUrl: sanitizedConfigUrl,
@@ -2079,7 +2091,7 @@ app.get('/api/public/model/:id', async (req, res) => {
     const assetsRaw = model.assets || undefined;
     const assets = assetsRaw && typeof assetsRaw === 'object'
       ? Object.fromEntries(
-          Object.entries(assetsRaw).map(([key, value]) => [key, normalizeAssetPath(value)])
+          Object.entries(assetsRaw).map(([key, value]) => [key, normalizeAssetPathDev(value)])
         )
       : undefined;
     
@@ -2097,9 +2109,9 @@ app.get('/api/public/model/:id', async (req, res) => {
       id: model._id,
       name: model.name,
       displayName: model.displayName,
-      file: model.path || `${process.env.NODE_ENV === 'production' 
+      file: model.path || `${process.env.NODE_ENV === 'production'
         ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
-        : (process.env.LOCAL_BACKEND_URL || 'http://192.168.1.7:5000')}/models/${model.file}`,
+        : (process.env.LOCAL_BACKEND_URL || 'http://192.168.1.7:5000')}${model.file && model.file.startsWith('/models/') ? model.file : `/models/${model.file || ''}`}`,
       section: model.section || 'Upright Counter',
       type: model.type,
       configUrl: normalizeConfigUrl(model.configUrl || meta.configUrl) || undefined,
@@ -2141,7 +2153,7 @@ app.get('/api/embed/resolve', async (req, res) => {
       id: model._id,
       name: model.name,
       displayName: model.displayName,
-      file: model.file && (model.file.startsWith('http') || model.file.startsWith('https://')) ? model.file : `${baseUrl}/models/${model.file}`,
+      file: model.file && (model.file.startsWith('http') || model.file.startsWith('https://')) ? model.file : `${baseUrl}${model.file && model.file.startsWith('/models/') ? model.file : `/models/${model.file || ''}`}`,
       configUrl: model.configUrl ? (model.configUrl.startsWith('http') ? model.configUrl : `${baseUrl}${model.configUrl}`) : undefined,
       assets: model.assets || {},
       metadata: model.metadata || {},
