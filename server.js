@@ -174,9 +174,9 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ 
+const upload = multer({
   storage: storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
+  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB limit for very large models
   fileFilter: function (req, file, cb) {
     // Accept only GLB/GLTF files
     const allowedTypes = ['.glb', '.gltf'];
@@ -1267,37 +1267,42 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       for (const key of ['base', 'doors', 'drawers', 'glassDoors', 'other']) {
         if (req.files && req.files[key] && req.files[key][0]) {
           const file = req.files[key][0];
-          console.log(`Uploading ${key} file: ${file.path}`);
+          console.log(`Uploading ${key} file: ${file.path} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
           console.log('Cloudinary config:', {
             cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
             api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
             api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
           });
-          
-          const uploadResult = await uploadToCloudinary(file.path, {
-            folder: 'models',
-            public_id: `${name}_${key}`
-          });
-          
-          if (uploadResult.success) {
-            assets[key] = uploadResult.public_id;
-            assetUrls[key] = uploadResult.url;
-            console.log(`Asset uploaded to Cloudinary: ${key} -> ${uploadResult.url}`);
-          } else {
-            console.error(`Failed to upload ${key}:`, uploadResult.error);
-            return res.status(500).json({ 
-              message: `Failed to upload ${key} file to Cloudinary`, 
-              error: uploadResult.error 
+
+          try {
+            const uploadResult = await uploadToCloudinary(file.path, {
+              folder: 'models',
+              public_id: `${name}_${key}`,
+              use_filename: true,
+              unique_filename: false
             });
+
+            if (uploadResult.success) {
+              assets[key] = uploadResult.public_id;
+              assetUrls[key] = uploadResult.url;
+              console.log(`✅ Asset uploaded to Cloudinary: ${key} -> ${uploadResult.url}`);
+            } else {
+              console.error(`❌ Failed to upload ${key}:`, uploadResult.error);
+              // Continue with other uploads instead of failing completely
+              console.warn(`⚠️ Skipping ${key} upload due to error, continuing with other assets`);
+            }
+          } catch (uploadError) {
+            console.error(`❌ Exception during ${key} upload:`, uploadError.message);
+            console.warn(`⚠️ Skipping ${key} upload due to exception, continuing with other assets`);
           }
+        } else {
+          console.log(`⏭️ No ${key} file provided, skipping`);
         }
       }
     } catch (error) {
-      console.error('Cloudinary upload error:', error);
-      return res.status(500).json({ 
-        message: 'Cloudinary upload failed', 
-        error: error.message 
-      });
+      console.error('❌ Cloudinary upload error:', error);
+      // Continue with model creation even if some assets failed to upload
+      console.warn('⚠️ Some assets failed to upload, but continuing with model creation');
     }
 
     // Use base as main file if present
@@ -1307,6 +1312,15 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       console.error('No base model file uploaded.');
       return res.status(400).json({ message: "No base model file uploaded" });
     }
+
+    // Log which assets were successfully uploaded
+    console.log('✅ Successfully uploaded assets:', Object.keys(assets));
+    console.log('📋 Asset URLs:', assetUrls);
+    console.log('📊 Upload summary:', {
+      totalAssets: Object.keys(req.files || {}).length,
+      successfulUploads: Object.keys(assets).length,
+      failedUploads: Object.keys(req.files || {}).filter(key => req.files[key] && req.files[key][0] && !assets[key]).length
+    });
 
 
     // Handle uploaded config file
@@ -1339,6 +1353,14 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       uploadedBy: req.user._id,
       configUrl: configUrl,
       section: req.body.section || 'Upright Counter'
+    });
+
+    console.log('📋 Model data to be saved:', {
+      name: newModel.name,
+      path: newModel.path,
+      file: newModel.file,
+      assets: newModel.assets,
+      configUrl: newModel.configUrl
     });
 
     await newModel.save();
@@ -1407,14 +1429,23 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       return res.status(500).json({ message: 'Model uploaded but failed to write config file', error: configErr.message });
     }
 
-    console.log('Model saved:', newModel);
-    console.log('Generated JSON config template:', JSON.stringify(jsonConfigTemplate, null, 2));
+    console.log('✅ Model saved successfully:', newModel._id);
+    console.log('📋 Final model data:', {
+      id: newModel._id,
+      name: newModel.name,
+      path: newModel.path,
+      assets: newModel.assets,
+      configUrl: newModel.configUrl
+    });
+    console.log('📄 Generated JSON config template:', JSON.stringify(jsonConfigTemplate, null, 2));
 
     res.status(201).json({
       message: "Model uploaded successfully",
       model: newModel,
       configUrl,
-      assetUrls: assetUrls
+      assetUrls: assetUrls,
+      uploadedAssets: Object.keys(assets),
+      failedAssets: Object.keys(req.files || {}).filter(key => !assets[key] && req.files[key] && req.files[key][0])
     });
     console.log('=== MODEL UPLOAD END ===');
   } catch (error) {

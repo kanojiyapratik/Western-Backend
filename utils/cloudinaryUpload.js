@@ -4,13 +4,43 @@ const fs = require('fs');
 // Upload file to Cloudinary
 const uploadToCloudinary = async (filePath, options = {}) => {
   try {
-    const result = await cloudinary.uploader.upload(filePath, {
-      resource_type: 'auto', // Automatically detect file type
-      folder: options.folder || 'models', // Default folder
-      public_id: options.public_id, // Optional custom public ID
-      timeout: 120000, // 2 minutes timeout
+    console.log(`Starting Cloudinary upload for file: ${filePath}`);
+
+    // Check file size first
+    const fs = require('fs');
+    const stats = fs.statSync(filePath);
+    const fileSizeMB = stats.size / (1024 * 1024);
+    console.log(`File size: ${fileSizeMB.toFixed(2)} MB`);
+
+    // For very large files, use different strategy
+    const uploadOptions = {
+      resource_type: 'auto',
+      folder: options.folder || 'models',
+      public_id: options.public_id,
       ...options
-    });
+    };
+
+    if (fileSizeMB > 50) {
+      // For files over 50MB, use raw resource type and extended settings
+      uploadOptions.resource_type = 'raw';
+      uploadOptions.timeout = 1200000; // 20 minutes for very large files
+      uploadOptions.chunk_size = 1000000; // 1MB chunks for stability
+      console.log(`Using extended settings for large file:`, uploadOptions);
+    } else if (fileSizeMB > 10) {
+      // For files 10-50MB
+      uploadOptions.timeout = 900000; // 15 minutes
+      uploadOptions.chunk_size = 2000000; // 2MB chunks
+      console.log(`Using extended settings for medium-large file:`, uploadOptions);
+    } else {
+      // For smaller files
+      uploadOptions.timeout = 300000; // 5 minutes
+      uploadOptions.chunk_size = 6000000; // 6MB chunks
+      console.log(`Using standard settings for smaller file:`, uploadOptions);
+    }
+
+    const result = await cloudinary.uploader.upload(filePath, uploadOptions);
+
+    console.log(`Cloudinary upload successful: ${result.public_id} (${(result.bytes / (1024 * 1024)).toFixed(2)} MB)`);
     
     // Delete local file after successful upload
     if (fs.existsSync(filePath)) {
