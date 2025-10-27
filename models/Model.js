@@ -17,7 +17,15 @@ const ModelSchema = new mongoose.Schema({
   lights: { type: [mongoose.Schema.Types.Mixed], default: [] },
   hiddenInitially: { type: [String], default: [] },
   uiWidgets: { type: [mongoose.Schema.Types.Mixed], default: [] },
-  presets: { type: mongoose.Schema.Types.Mixed }
+  presets: { type: mongoose.Schema.Types.Mixed },
+  // Preset images for easy reference in configurations
+  presetImages: [{
+    originalName: { type: String },
+    filename: { type: String },
+    url: { type: String, required: true },
+    publicId: { type: String },
+    uploadedAt: { type: Date, default: Date.now }
+  }]
 }, { timestamps: true });
 
 module.exports = mongoose.model('Model', ModelSchema);

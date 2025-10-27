@@ -178,13 +178,13 @@ const upload = multer({
   storage: storage,
   limits: { fileSize: 200 * 1024 * 1024 }, // 200MB limit for very large models
   fileFilter: function (req, file, cb) {
-    // Accept only GLB/GLTF files
-    const allowedTypes = ['.glb', '.gltf'];
+    // Accept GLB/GLTF files and image files
+    const allowedTypes = ['.glb', '.gltf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'];
     const ext = path.extname(file.originalname).toLowerCase();
     if (allowedTypes.includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Only GLB and GLTF files are allowed'), false);
+      cb(new Error('Only GLB, GLTF, and image files (JPG, PNG, BMP, TIFF, WebP) are allowed'), false);
     }
   }
 });
@@ -1557,7 +1557,7 @@ app.post("/api/upload-texture", authMiddleware, uploadTexture.single('texture'),
     // Return the file path relative to public directory
     const filePath = `/texture/${req.file.filename}`;
     console.log(`📤 Texture uploaded successfully: ${filePath}`);
-    
+
     res.status(200).json({
       message: "Texture uploaded successfully",
       path: filePath,
@@ -1574,6 +1574,55 @@ app.post("/api/upload-texture", authMiddleware, uploadTexture.single('texture'),
       }
     }
     res.status(500).json({ message: "Error uploading texture", error: error.message });
+  }
+});
+
+// Upload preset images to Cloudinary (for admins)
+app.post("/api/admin/upload-preset-images", authMiddleware, requireAdmin, uploadTexture.fields([
+  { name: 'images', maxCount: 10 }
+]), async (req, res) => {
+  try {
+    if (!req.files || !req.files.images || req.files.images.length === 0) {
+      return res.status(400).json({ message: "No images uploaded" });
+    }
+
+    const { uploadToCloudinary } = require('./utils/cloudinaryUpload');
+    const uploadedImages = [];
+
+    for (const file of req.files.images) {
+      try {
+        console.log(`Uploading preset image: ${file.path}`);
+        const uploadResult = await uploadToCloudinary(file.path, {
+          folder: 'preset-images',
+          public_id: `preset_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+        });
+
+        if (uploadResult.success) {
+          uploadedImages.push({
+            originalName: file.originalname,
+            filename: file.filename,
+            url: uploadResult.url,
+            publicId: uploadResult.public_id,
+            uploadedAt: new Date().toISOString()
+          });
+          console.log(`✅ Preset image uploaded to Cloudinary: ${uploadResult.url}`);
+        } else {
+          console.error(`❌ Failed to upload preset image:`, uploadResult.error);
+        }
+      } catch (uploadError) {
+        console.error(`❌ Exception during preset image upload:`, uploadError.message);
+      }
+    }
+
+    res.status(200).json({
+      message: "Preset images uploaded successfully",
+      images: uploadedImages,
+      uploadedCount: uploadedImages.length,
+      totalCount: req.files.images.length
+    });
+  } catch (error) {
+    console.error("Preset images upload error:", error);
+    res.status(500).json({ message: "Error uploading preset images", error: error.message });
   }
 });
 
