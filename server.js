@@ -98,9 +98,31 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' })); // Increase JSON payload limit for configurations
 app.use(express.urlencoded({ limit: '50mb', extended: true })); // Also increase URL-encoded limit
 
+// Ensure upload directories exist on startup
+const ensureDirectoriesExist = () => {
+  const dirs = [
+    path.join(__dirname, '../Frontend/public/models'),
+    path.join(__dirname, '../Frontend/public/textures'),
+    path.join(__dirname, '../Frontend/public/texture'),
+    path.join(__dirname, '../Frontend/public/thumbnails'),
+    path.join(__dirname, '../Frontend/public/configs'),
+    path.join(__dirname, '../Frontend/public/config-textures')
+  ];
+
+  dirs.forEach(dir => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log(`✅ Created directory: ${dir}`);
+    }
+  });
+};
+
+// Call on startup
+ensureDirectoriesExist();
+
 // Serve uploaded models statically from backend
 app.use('/models', express.static(path.join(__dirname, '../Frontend/public/models')));
-// Serve textures statically from backend  
+// Serve textures statically from backend
 app.use('/textures', express.static(path.join(__dirname, '../Frontend/public/textures')));
 app.use('/texture', express.static(path.join(__dirname, '../Frontend/public/texture')));
 // Serve thumbnails statically from backend
@@ -162,10 +184,7 @@ const SavedConfiguration = mongoose.model("SavedConfiguration", SavedConfigurati
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const uploadPath = path.join(__dirname, '../Frontend/public/models');
-    // Create directory if it doesn't exist
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
+    // Directory creation is now handled by ensureDirectoriesExist() on startup
     cb(null, uploadPath);
   },
   filename: function (req, file, cb) {
@@ -193,10 +212,7 @@ const upload = multer({
 const textureStorage = multer.diskStorage({
   destination: function (req, file, cb) {
     const uploadPath = path.join(__dirname, '../Frontend/public/texture');
-    // Create directory if it doesn't exist
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
+    // Directory creation is now handled by ensureDirectoriesExist() on startup
     cb(null, uploadPath);
   },
   filename: function (req, file, cb) {
@@ -407,14 +423,15 @@ async function performModelDeletion(model) {
 async function copyTextureForConfig(sourcePath, configId, textureKey) {
   try {
     console.log(`📂 copyTextureForConfig called with:`, { sourcePath, configId, textureKey });
-    
+
     const configTexturesPath = path.join(__dirname, '../Frontend/public/config-textures', configId);
     console.log(`📂 Config textures path: ${configTexturesPath}`);
-    
-    // Create directory if it doesn't exist
+
+    // Directory creation is now handled by ensureDirectoriesExist() on startup
+    // But we still need to create the specific configId subdirectory
     if (!fs.existsSync(configTexturesPath)) {
       fs.mkdirSync(configTexturesPath, { recursive: true });
-      console.log(`📂 Created directory: ${configTexturesPath}`);
+      console.log(`📂 Created config-specific directory: ${configTexturesPath}`);
     }
     
     const sourceFullPath = path.join(__dirname, '../Frontend/public', sourcePath);
@@ -1330,9 +1347,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
     if (req.files && req.files.config && req.files.config[0]) {
       const configFile = req.files.config[0];
       const configDir = pathModule.join(__dirname, '../Frontend/public/configs');
-      if (!fs.existsSync(configDir)) {
-        fs.mkdirSync(configDir, { recursive: true });
-      }
+      // Directory creation is now handled by ensureDirectoriesExist() on startup
       const newConfigPath = pathModule.join(configDir, `${name}.json`);
       // Move the uploaded file to the new name
       fs.renameSync(configFile.path, newConfigPath);
@@ -2310,9 +2325,7 @@ app.use((err, req, res, next) => {
 const configsStorage = multer.diskStorage({
   destination: function (req, file, cb) {
     const uploadPath = path.join(__dirname, '../Frontend/public/configs');
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
+    // Directory creation is now handled by ensureDirectoriesExist() on startup
     cb(null, uploadPath);
   },
   filename: function (req, file, cb) {
