@@ -1,4 +1,7 @@
 // Backend/server.js
+// Load environment variables first
+require("dotenv").config();
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -7,22 +10,38 @@ const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const cloudinary = require('cloudinary').v2;
+const { uploadToS3, deleteFromS3, generateS3Key } = require('./utils/s3Upload');
 
-// Load environment variables first
-require("dotenv").config();
+console.log('🚀 Starting 3D Configurator Backend Server...');
+console.log('📊 Environment:', process.env.NODE_ENV || 'development');
+console.log('🔗 MongoDB:', process.env.MONGO_URI ? 'Configured' : 'Missing');
+console.log('🔑 JWT:', process.env.JWT_SECRET ? 'Configured' : 'Missing');
 
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
+// Legacy Cloudinary (for migration/fallback)
+let cloudinary = null;
+try {
+  cloudinary = require('cloudinary').v2;
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+  });
+} catch (e) {
+  console.log('Cloudinary not configured (migrating to S3)');
+}
 
-console.log('Cloudinary configured with:', {
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'missing',
-  api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
-  api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
+console.log('Storage configuration:', {
+  s3: {
+    bucket: process.env.AWS_S3_BUCKET_NAME || 'missing',
+    region: process.env.AWS_REGION || 'missing',
+    accessKey: process.env.AWS_ACCESS_KEY_ID ? 'present' : 'missing',
+    secretKey: process.env.AWS_SECRET_ACCESS_KEY ? 'present' : 'missing'
+  },
+  cloudinary: {
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'not configured',
+    api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
+    api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
+  }
 });
 const ActivityLog = require("./models/ActivityLog");
 const { sendEmbedEmail } = require("./utils/mailer");
@@ -301,94 +320,70 @@ function collectAssetStrings(value) {
 
 async function performModelDeletion(model) {
   const report = { deleted: [], notFound: [], errors: [] };
-  
+
   try {
-    const { deleteFromCloudinary } = require('./utils/cloudinaryUpload');
-    
-    // Delete main file from Cloudinary if it's a Cloudinary URL
-    if (model.path && model.path.includes('cloudinary.com')) {
+    // Delete main file from S3 if it's an S3 URL
+    if (model.path && model.path.includes('amazonaws.com')) {
       try {
-        // Extract public_id from Cloudinary URL
-        // URL format: https://res.cloudinary.com/cloud/image/upload/v123/folder/filename.ext
+        // Extract S3 key from URL
+        // URL format: https://bucket.s3.region.amazonaws.com/folder/filename.ext
         const urlParts = model.path.split('/');
-        // Find the part after 'upload/v{version}/' which contains folder/filename
-        const uploadIndex = urlParts.findIndex(part => part.startsWith('v') && /^v\d+$/.test(part));
-        let fullPublicId;
-        if (uploadIndex !== -1 && uploadIndex + 1 < urlParts.length) {
-          // Get everything after version (folder/filename.ext)
-          const pathAfterVersion = urlParts.slice(uploadIndex + 1).join('/');
-          fullPublicId = pathAfterVersion.replace(/\.[^.]+$/, ''); // remove extension
-        } else {
-          // Fallback to old method
-          const fileWithExt = urlParts[urlParts.length - 1];
-          fullPublicId = `models/${fileWithExt.split('.')[0]}`;
-        }
-        console.log(`Model data:`, { file: model.file, path: model.path });
-        console.log(`Extracted public_id: ${fullPublicId}`);
-        
-        // Check all files in Cloudinary (both raw and image types)
-        try {
-          const cloudinary = require('cloudinary').v2;
-          
-          // Check RAW files
-          const rawResult = await cloudinary.api.resources({
-            type: 'upload',
-            resource_type: 'raw',
-            max_results: 20
-          });
-          console.log('All RAW files in Cloudinary:', rawResult.resources.map(r => ({ public_id: r.public_id, url: r.secure_url })));
-          
-          // Check IMAGE files
-          const imageResult = await cloudinary.api.resources({
-            type: 'upload',
-            resource_type: 'image',
-            max_results: 20
-          });
-          console.log('All IMAGE files in Cloudinary:', imageResult.resources.map(r => ({ public_id: r.public_id, url: r.secure_url })));
-          
-          // Try to find our specific file
-          const allFiles = [...rawResult.resources, ...imageResult.resources];
-          const matchingFile = allFiles.find(f => f.public_id === fullPublicId);
-          console.log('Matching file found:', matchingFile ? { public_id: matchingFile.public_id, resource_type: matchingFile.resource_type, url: matchingFile.secure_url } : 'NOT FOUND');
-          
-        } catch (err) {
-          console.log('Could not list Cloudinary files:', err.message);
-        }
-        
-        console.log(`Deleting from Cloudinary: ${fullPublicId}`);
-        console.log(`URL analysis: ${model.path}`);
-        console.log(`URL parts:`, model.path.split('/'));
-        const deleteResult = await deleteFromCloudinary(fullPublicId, 'image');
-        if (deleteResult.success) {
-          report.deleted.push(`cloudinary/${fullPublicId}`);
-        } else {
-          report.errors.push(`Failed to delete from Cloudinary: ${deleteResult.error}`);
+        // Find the bucket name and then get everything after it
+        const s3Index = urlParts.findIndex(part => part.includes('.s3.'));
+        if (s3Index !== -1 && s3Index + 1 < urlParts.length) {
+          const s3Key = urlParts.slice(s3Index + 1).join('/');
+          console.log(`Deleting main file from S3: ${s3Key}`);
+          const deleteResult = await deleteFromS3(s3Key);
+          if (deleteResult.success) {
+            report.deleted.push(`s3/${s3Key}`);
+          } else {
+            report.errors.push(`Failed to delete from S3: ${deleteResult.error}`);
+          }
         }
       } catch (err) {
-        report.errors.push(`Cloudinary deletion error: ${err.message}`);
+        report.errors.push(`S3 deletion error: ${err.message}`);
       }
     }
-    
-    // Delete assets from Cloudinary
+
+    // Delete assets from S3
     if (model.assets && typeof model.assets === 'object') {
       for (const [key, assetUrl] of Object.entries(model.assets)) {
-        if (assetUrl && assetUrl.includes('cloudinary.com')) {
+        if (assetUrl && assetUrl.includes('amazonaws.com')) {
           try {
-            // Extract public_id from Cloudinary URL
+            // Extract S3 key from URL
             const urlParts = assetUrl.split('/');
-            const fileWithExt = urlParts[urlParts.length - 1];
-            const publicId = fileWithExt.split('.')[0];
-            const fullPublicId = `models/${publicId}`;
-            
-            console.log(`Deleting asset from Cloudinary: ${fullPublicId}`);
-            const deleteResult = await deleteFromCloudinary(fullPublicId, 'image');
-            if (deleteResult.success) {
-              report.deleted.push(`cloudinary/${fullPublicId}`);
-            } else {
-              report.errors.push(`Failed to delete asset from Cloudinary: ${deleteResult.error}`);
+            const s3Index = urlParts.findIndex(part => part.includes('.s3.'));
+            if (s3Index !== -1 && s3Index + 1 < urlParts.length) {
+              const s3Key = urlParts.slice(s3Index + 1).join('/');
+              console.log(`Deleting asset from S3: ${s3Key}`);
+              const deleteResult = await deleteFromS3(s3Key);
+              if (deleteResult.success) {
+                report.deleted.push(`s3/${s3Key}`);
+              } else {
+                report.errors.push(`Failed to delete asset from S3: ${deleteResult.error}`);
+              }
             }
           } catch (err) {
             report.errors.push(`Asset deletion error: ${err.message}`);
+          }
+        }
+      }
+    }
+
+    // Delete preset images from S3
+    if (model.presetImages && Array.isArray(model.presetImages)) {
+      for (const image of model.presetImages) {
+        if (image.publicId) {
+          try {
+            console.log(`Deleting preset image from S3: ${image.publicId}`);
+            const deleteResult = await deleteFromS3(image.publicId);
+            if (deleteResult.success) {
+              report.deleted.push(`s3/${image.publicId}`);
+            } else {
+              report.errors.push(`Failed to delete preset image from S3: ${deleteResult.error}`);
+            }
+          } catch (err) {
+            report.errors.push(`Preset image deletion error: ${err.message}`);
           }
         }
       }
@@ -1155,6 +1150,8 @@ app.get("/api/models", async (req, res) => {
         camera: model.camera || meta.camera || undefined,
         assets,
         presets: model.presets || undefined,
+        // Include preset images for the frontend
+        presetImages: model.presetImages || [],
         // Expose admin-defined placement/transform so the viewer can apply it
         placementMode: model.placementMode || 'autofit',
         modelPosition: Array.isArray(model.modelPosition) ? model.modelPosition : undefined,
@@ -1246,7 +1243,14 @@ app.get("/api/admin/models", authMiddleware, requireModelManager, async (req, re
       query = query.populate('uploadedBy', 'name email');
     }
     const models = await query.lean();
-    res.json(models);
+
+    // Ensure presetImages are included in the response
+    const modelsWithPresetImages = models.map(model => ({
+      ...model,
+      presetImages: model.presetImages || []
+    }));
+
+    res.json(modelsWithPresetImages);
   } catch (error) {
     console.error("Get models error:", error, error.stack);
     res.status(500).json({ message: "Error fetching models", error: error.message });
@@ -1275,34 +1279,24 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
     console.log('Parsed Interaction Groups:', parsedInteractionGroups);
     console.log('Parsed Metadata:', parsedMetadata);
 
-    // Upload files to Cloudinary
-    const { uploadToCloudinary } = require('./utils/cloudinaryUpload');
+    // Upload files to S3
     const assets = {};
     const assetUrls = {};
-    
+
     try {
       for (const key of ['base', 'doors', 'drawers', 'glassDoors', 'other']) {
         if (req.files && req.files[key] && req.files[key][0]) {
           const file = req.files[key][0];
           console.log(`Uploading ${key} file: ${file.path} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
-          console.log('Cloudinary config:', {
-            cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-            api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
-            api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
-          });
 
           try {
-            const uploadResult = await uploadToCloudinary(file.path, {
-              folder: 'models',
-              public_id: `${name}_${key}`,
-              use_filename: true,
-              unique_filename: false
-            });
+            const s3Key = generateS3Key('models', `${name}_${key}${path.extname(file.originalname)}`);
+            const uploadResult = await uploadToS3(file.path, s3Key);
 
             if (uploadResult.success) {
-              assets[key] = uploadResult.public_id;
+              assets[key] = s3Key; // Store S3 key instead of public_id
               assetUrls[key] = uploadResult.url;
-              console.log(`✅ Asset uploaded to Cloudinary: ${key} -> ${uploadResult.url}`);
+              console.log(`✅ Asset uploaded to S3: ${key} -> ${uploadResult.url}`);
             } else {
               console.error(`❌ Failed to upload ${key}:`, uploadResult.error);
               // Continue with other uploads instead of failing completely
@@ -1317,7 +1311,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
         }
       }
     } catch (error) {
-      console.error('❌ Cloudinary upload error:', error);
+      console.error('❌ S3 upload error:', error);
       // Continue with model creation even if some assets failed to upload
       console.warn('⚠️ Some assets failed to upload, but continuing with model creation');
     }
@@ -1482,117 +1476,108 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
   }
 });
 
-// Simple file upload endpoint (uploads to Cloudinary)
+// Simple file upload endpoint (uploads to S3)
 app.post("/api/upload", authMiddleware, requireModelUploadPerm, upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: "No file uploaded" });
-    }
+try {
+if (!req.file) {
+  return res.status(400).json({ message: "No file uploaded" });
+}
 
-    console.log('Uploading file to Cloudinary:', req.file.path);
-    console.log('Cloudinary config check:', {
-      cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'missing',
-      api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
-      api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
-    });
+console.log('Uploading file to S3:', req.file.path);
 
-    // Upload to Cloudinary
-    const { uploadToCloudinary } = require('./utils/cloudinaryUpload');
-    const uploadResult = await uploadToCloudinary(req.file.path, {
-      folder: 'models',
-      public_id: `single_${Date.now()}`
-    });
-    
-    console.log('Cloudinary upload result:', uploadResult);
-    
-    if (uploadResult.success) {
-      res.status(200).json({
-        message: "File uploaded successfully",
-        path: uploadResult.url,
-        filename: uploadResult.public_id
-      });
-    } else {
-      console.error('Cloudinary upload failed:', uploadResult.error);
-      console.error('Cloudinary config status:', {
-        cloud_name: process.env.CLOUDINARY_CLOUD_NAME ? 'present' : 'missing',
-        api_key: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing', 
-        api_secret: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
-      });
-      res.status(500).json({ 
-        message: "Failed to upload to Cloudinary", 
-        error: uploadResult.error,
-        debug: {
-          hasCloudName: !!process.env.CLOUDINARY_CLOUD_NAME,
-          hasApiKey: !!process.env.CLOUDINARY_API_KEY,
-          hasApiSecret: !!process.env.CLOUDINARY_API_SECRET
-        }
-      });
-    }
-  } catch (error) {
-    console.error("File upload error:", error);
-    res.status(500).json({ message: "Error uploading file", error: error.message });
-  }
+// Upload to S3
+const s3Key = generateS3Key('models', req.file.originalname);
+const uploadResult = await uploadToS3(req.file.path, s3Key);
+
+console.log('S3 upload result:', uploadResult);
+
+if (uploadResult.success) {
+  res.status(200).json({
+    message: "File uploaded successfully",
+    path: uploadResult.url,
+    filename: uploadResult.key
+  });
+} else {
+  console.error('S3 upload failed:', uploadResult.error);
+  res.status(500).json({
+    message: "Failed to upload to S3",
+    error: uploadResult.error
+  });
+}
+} catch (error) {
+console.error("File upload error:", error);
+res.status(500).json({ message: "Error uploading file", error: error.message });
+}
 });
 
-// Upload texture file
+// Upload texture file to S3
 app.post("/api/admin/textures/upload", authMiddleware, requireModelUploadPerm, uploadTexture.single('textureFile'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    // Return the file path relative to public directory
-    const filePath = `/texture/${req.file.filename}`;
-    res.status(200).json({
-      message: "Texture uploaded successfully",
-      path: filePath,
-      filename: req.file.filename,
-      originalName: req.file.originalname
-    });
+    console.log('Uploading texture to S3:', req.file.path);
+
+    // Upload to S3
+    const s3Key = generateS3Key('textures', req.file.originalname);
+    const uploadResult = await uploadToS3(req.file.path, s3Key);
+
+    if (uploadResult.success) {
+      res.status(200).json({
+        message: "Texture uploaded successfully",
+        path: uploadResult.url,
+        filename: uploadResult.key,
+        originalName: req.file.originalname
+      });
+    } else {
+      console.error('S3 texture upload failed:', uploadResult.error);
+      res.status(500).json({
+        message: "Failed to upload texture to S3",
+        error: uploadResult.error
+      });
+    }
   } catch (error) {
     console.error("Texture upload error:", error);
-    // Clean up uploaded file on error
-    if (req.file) {
-      const fileToDelete = path.join(__dirname, '../Frontend/public/texture', req.file.filename);
-      if (fs.existsSync(fileToDelete)) {
-        fs.unlinkSync(fileToDelete);
-      }
-    }
     res.status(500).json({ message: "Error uploading texture", error: error.message });
   }
 });
 
-// Upload texture file (for regular users)
+// Upload texture file (for regular users) to S3
 app.post("/api/upload-texture", authMiddleware, uploadTexture.single('texture'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    // Return the file path relative to public directory
-    const filePath = `/texture/${req.file.filename}`;
-    console.log(`📤 Texture uploaded successfully: ${filePath}`);
+    console.log('Uploading user texture to S3:', req.file.path);
 
-    res.status(200).json({
-      message: "Texture uploaded successfully",
-      path: filePath,
-      filename: req.file.filename,
-      originalName: req.file.originalname
-    });
+    // Upload to S3
+    const s3Key = generateS3Key('textures', req.file.originalname);
+    const uploadResult = await uploadToS3(req.file.path, s3Key);
+
+    if (uploadResult.success) {
+      console.log(`📤 Texture uploaded successfully: ${uploadResult.url}`);
+      res.status(200).json({
+        message: "Texture uploaded successfully",
+        path: uploadResult.url,
+        filename: uploadResult.key,
+        originalName: req.file.originalname
+      });
+    } else {
+      console.error('S3 texture upload failed:', uploadResult.error);
+      res.status(500).json({
+        message: "Failed to upload texture to S3",
+        error: uploadResult.error
+      });
+    }
   } catch (error) {
     console.error("Texture upload error:", error);
-    // Clean up uploaded file on error
-    if (req.file) {
-      const fileToDelete = path.join(__dirname, '../Frontend/public/texture', req.file.filename);
-      if (fs.existsSync(fileToDelete)) {
-        fs.unlinkSync(fileToDelete);
-      }
-    }
     res.status(500).json({ message: "Error uploading texture", error: error.message });
   }
 });
 
-// Upload preset images to Cloudinary (for admins)
+// Upload preset images to S3 and store in model (for admins)
 app.post("/api/admin/upload-preset-images", authMiddleware, requireAdmin, uploadTexture.fields([
   { name: 'images', maxCount: 10 }
 ]), async (req, res) => {
@@ -1601,26 +1586,28 @@ app.post("/api/admin/upload-preset-images", authMiddleware, requireAdmin, upload
       return res.status(400).json({ message: "No images uploaded" });
     }
 
-    const { uploadToCloudinary } = require('./utils/cloudinaryUpload');
+    const { modelId } = req.body;
+    if (!modelId) {
+      return res.status(400).json({ message: "Model ID is required" });
+    }
+
     const uploadedImages = [];
 
     for (const file of req.files.images) {
       try {
-        console.log(`Uploading preset image: ${file.path}`);
-        const uploadResult = await uploadToCloudinary(file.path, {
-          folder: 'preset-images',
-          public_id: `preset_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-        });
+        console.log(`Uploading preset image to S3: ${file.path}`);
+        const s3Key = generateS3Key('preset-images', file.originalname);
+        const uploadResult = await uploadToS3(file.path, s3Key);
 
         if (uploadResult.success) {
           uploadedImages.push({
             originalName: file.originalname,
             filename: file.filename,
             url: uploadResult.url,
-            publicId: uploadResult.public_id,
+            publicId: uploadResult.key, // Store S3 key as publicId for consistency
             uploadedAt: new Date().toISOString()
           });
-          console.log(`✅ Preset image uploaded to Cloudinary: ${uploadResult.url}`);
+          console.log(`✅ Preset image uploaded to S3: ${uploadResult.url}`);
         } else {
           console.error(`❌ Failed to upload preset image:`, uploadResult.error);
         }
@@ -1629,11 +1616,34 @@ app.post("/api/admin/upload-preset-images", authMiddleware, requireAdmin, upload
       }
     }
 
+    // Store the uploaded images in the model if we have successful uploads
+    if (uploadedImages.length > 0) {
+      try {
+        const model = await Model.findById(modelId);
+        if (model) {
+          // Initialize presetImages array if it doesn't exist
+          if (!model.presetImages) {
+            model.presetImages = [];
+          }
+          // Add new images to existing ones
+          model.presetImages = [...model.presetImages, ...uploadedImages];
+          await model.save();
+          console.log(`✅ Stored ${uploadedImages.length} preset images in model ${modelId}`);
+        } else {
+          console.warn(`⚠️ Model ${modelId} not found, images uploaded but not stored in model`);
+        }
+      } catch (modelError) {
+        console.error('❌ Error storing preset images in model:', modelError);
+        // Don't fail the entire request if model storage fails
+      }
+    }
+
     res.status(200).json({
       message: "Preset images uploaded successfully",
       images: uploadedImages,
       uploadedCount: uploadedImages.length,
-      totalCount: req.files.images.length
+      totalCount: req.files.images.length,
+      modelId: modelId
     });
   } catch (error) {
     console.error("Preset images upload error:", error);
@@ -1752,7 +1762,7 @@ app.post("/api/admin/models", authMiddleware, requireModelUploadPerm, async (req
 app.put("/api/admin/models/:id", authMiddleware, requireModelEditPerm, async (req, res) => {
   try {
     const { id } = req.params;
-  const { name, displayName, type, status, file, path: filePath, configUrl, assets, section } = req.body;
+  const { name, displayName, type, status, file, path: filePath, configUrl, assets, section, presetImages } = req.body;
 
   const updateData = {};
   if (typeof name === 'string') updateData.name = name;
@@ -1762,6 +1772,7 @@ app.put("/api/admin/models/:id", authMiddleware, requireModelEditPerm, async (re
   if (typeof configUrl === 'string') updateData.configUrl = configUrl.trim();
   if (assets !== undefined) updateData.assets = assets; // Add assets field
   if (typeof section === 'string') updateData.section = section;
+  if (presetImages !== undefined) updateData.presetImages = presetImages; // Add preset images field
   // Allow updating file via either file or path (use filename only)
   if (typeof file === 'string') updateData.file = file.split('/').pop();
   if (typeof filePath === 'string') updateData.file = filePath.split('/').pop();
@@ -1802,7 +1813,7 @@ app.delete("/api/admin/models/:id", authMiddleware, requireModelDeletePerm, asyn
     const { id } = req.params;
     console.log('=== DELETE MODEL DEBUG ===');
     console.log('Model ID to delete:', id);
-    
+
     const model = await Model.findById(id);
     console.log('Found model:', model ? `${model.name} (${model.file})` : 'null');
 
@@ -1810,13 +1821,28 @@ app.delete("/api/admin/models/:id", authMiddleware, requireModelDeletePerm, asyn
       return res.status(404).json({ message: "Model not found" });
     }
 
+    // Delete preset images from Cloudinary before deleting the model
+    if (model.presetImages && model.presetImages.length > 0) {
+      const { deleteCloudinaryFile } = require('./utils/cloudinaryCleanup');
+      for (const image of model.presetImages) {
+        if (image.publicId) {
+          try {
+            await deleteCloudinaryFile(image.publicId);
+            console.log(`✅ Deleted preset image from Cloudinary: ${image.publicId}`);
+          } catch (deleteError) {
+            console.warn(`⚠️ Failed to delete preset image ${image.publicId}:`, deleteError.message);
+          }
+        }
+      }
+    }
+
     const report = await performModelDeletion(model);
     console.log('Deletion report:', report);
     console.log('========================');
 
-    res.json({ 
-      message: "Model deleted successfully", 
-      report 
+    res.json({
+      message: "Model deleted successfully",
+      report
     });
   } catch (error) {
     console.error("Delete model error:", error);
@@ -2252,6 +2278,7 @@ app.get('/api/embed/resolve', async (req, res) => {
       configUrl: model.configUrl ? (model.configUrl.startsWith('http') ? model.configUrl : `${baseUrl}${model.configUrl}`) : undefined,
       assets: model.assets || {},
       metadata: model.metadata || {},
+      presetImages: model.presetImages || [],
       readOnly: true
     };
     return res.json({ success: true, model: payload });
