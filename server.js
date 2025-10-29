@@ -1133,7 +1133,7 @@ app.get("/api/models", async (req, res) => {
         id: model._id,
         name: model.name,
         displayName: model.displayName,
-        file: model.path && model.path.includes('cloudinary.com') ? model.path :
+        file: model.path && (model.path.includes('cloudinary.com') || model.path.includes('amazonaws.com')) ? model.path :
           (process.env.NODE_ENV === 'production'
             ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
             : (process.env.LOCAL_BACKEND_URL || 'http://localhost:5000')) + (model.file && model.file.startsWith('/models/') ? model.file : `/models/${model.file || ''}`),
@@ -2230,9 +2230,8 @@ app.get('/api/public/model/:id', async (req, res) => {
       id: model._id,
       name: model.name,
       displayName: model.displayName,
-      file: model.path || `${process.env.NODE_ENV === 'production'
-        ? (process.env.BACKEND_URL || 'https://threed-configurator-backend-7pwk.onrender.com')
-        : (process.env.LOCAL_BACKEND_URL || 'http://192.168.1.7:5000')}${model.file && model.file.startsWith('/models/') ? model.file : `/models/${model.file || ''}`}`,
+      file: model.path && (model.path.includes('cloudinary.com') || model.path.includes('amazonaws.com')) ? model.path :
+        `${baseUrl}${model.file && model.file.startsWith('/models/') ? model.file : `/models/${model.file || ''}`}`,
       section: model.section || 'Upright Counter',
       type: model.type,
       configUrl: normalizeConfigUrl(model.configUrl || meta.configUrl) || undefined,
