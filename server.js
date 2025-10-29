@@ -152,6 +152,9 @@ app.use('/configs', express.static(path.join(__dirname, '../Frontend/public/conf
 // API route for updating config files
 app.use('/api/configs', require('./routes/config'));
 
+// Model proxy routes for GLB files (bypasses CORS)
+app.use('/api/models/proxy', require('./routes/modelProxy'));
+
 // Admin dashboard routes with permission-based access
 app.use('/api/admin-dashboard', require('./routes/adminDashboard'));
 
@@ -1424,12 +1427,12 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       }
     };
 
-  // Write config file to public/configs and update model with configUrl
+  // Write config file to S3 and update model with configUrl
   // Reuse existing configUrl variable defined earlier for uploaded config file
   configUrl = configUrl || null;
     try {
       const { writeModelConfig } = require('./utils/configWriter');
-      configUrl = writeModelConfig(name || displayName, jsonConfigTemplate);
+      configUrl = await writeModelConfig(name || displayName, jsonConfigTemplate);
       newModel.configUrl = configUrl;
       await newModel.save();
       console.log('Config file written at:', configUrl);
@@ -2630,3 +2633,4 @@ app.get('/api/stream', async (req, res) => {
     res.status(500).end();
   }
 });
+

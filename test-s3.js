@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { uploadToS3, deleteFromS3, generateS3Key } = require('./utils/s3Upload');
 const fs = require('fs');
 const path = require('path');
