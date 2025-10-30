@@ -1452,15 +1452,22 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       }
     };
 
-  // Write config file to S3 and update model with configUrl
+  // Write config file locally and update model with configUrl
   // Reuse existing configUrl variable defined earlier for uploaded config file
   configUrl = configUrl || null;
     try {
-      const { writeModelConfig } = require('./utils/configWriter');
-      configUrl = await writeModelConfig(name || displayName, jsonConfigTemplate);
+      // Generate filename for local config (sanitize special characters)
+      const sanitizedName = (name || displayName || 'model').replace(/[^a-zA-Z0-9-_]/g, '_');
+      const filename = `config-${Date.now()}-${Math.floor(Math.random()*1e8)}-${sanitizedName}.json`;
+      const configPath = path.join(__dirname, '../Frontend/public/configs', filename);
+
+      // Write config to local file
+      fs.writeFileSync(configPath, JSON.stringify(jsonConfigTemplate, null, 2), 'utf8');
+      configUrl = `/configs/${filename}`;
+
       newModel.configUrl = configUrl;
       await newModel.save();
-      console.log('Config file written at:', configUrl);
+      console.log('Config file written locally at:', configUrl);
     } catch (configErr) {
       console.error('❌ Error writing config file:', configErr);
       return res.status(500).json({ message: 'Model uploaded but failed to write config file', error: configErr.message });
