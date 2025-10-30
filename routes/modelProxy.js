@@ -14,19 +14,26 @@ router.get('/glb/:key(*)', async (req, res) => {
     // Fetch the file from S3
     const response = await axios.get(s3Url, {
       responseType: 'stream',
-      timeout: 30000, // 30 second timeout
+      timeout: 60000, // 60 second timeout for production
+      headers: {
+        'User-Agent': '3D-Configurator-Proxy/1.0'
+      }
     });
 
     // Set appropriate headers
     res.setHeader('Content-Type', 'model/gltf-binary');
     res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     // Pipe the response
     response.data.pipe(res);
 
   } catch (error) {
     console.error('❌ Error proxying GLB file:', error.message);
-    res.status(404).json({ error: 'Model not found' });
+    console.error('❌ Error details:', error.response?.status, error.response?.statusText);
+    res.status(404).json({ error: 'Model not found', details: error.message });
   }
 });
 
