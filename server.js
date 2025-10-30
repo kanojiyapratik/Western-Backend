@@ -101,7 +101,7 @@ app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
-    
+
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -111,7 +111,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Cache-Control"]
 }));
 
 app.use(express.json({ limit: '50mb' })); // Increase JSON payload limit for configurations
@@ -151,6 +151,9 @@ app.use('/configs', express.static(path.join(__dirname, '../Frontend/public/conf
 
 // API route for updating config files
 app.use('/api/configs', require('./routes/config'));
+
+// Model proxy route for CORS bypass
+app.use('/api/models/proxy', require('./routes/modelProxy'));
 
 // Model proxy routes for GLB files (bypasses CORS)
 app.use('/api/models/proxy', require('./routes/modelProxy'));
@@ -1300,13 +1303,35 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
               assets[key] = s3Key; // Store S3 key instead of public_id
               assetUrls[key] = uploadResult.url;
               console.log(`✅ Asset uploaded to S3: ${key} -> ${uploadResult.url}`);
+
+              // Clean up local file after successful S3 upload
+              try {
+                fs.unlinkSync(file.path);
+                console.log(`🧹 Cleaned up local file: ${file.filename}`);
+              } catch (cleanupError) {
+                console.warn(`⚠️ Failed to clean up local file: ${cleanupError.message}`);
+              }
             } else {
               console.error(`❌ Failed to upload ${key}:`, uploadResult.error);
+              // Clean up local file on upload failure too
+              try {
+                fs.unlinkSync(file.path);
+                console.log(`🧹 Cleaned up failed upload file: ${file.filename}`);
+              } catch (cleanupError) {
+                console.warn(`⚠️ Failed to clean up failed upload file: ${cleanupError.message}`);
+              }
               // Continue with other uploads instead of failing completely
               console.warn(`⚠️ Skipping ${key} upload due to error, continuing with other assets`);
             }
           } catch (uploadError) {
             console.error(`❌ Exception during ${key} upload:`, uploadError.message);
+            // Clean up local file on exception too
+            try {
+              fs.unlinkSync(file.path);
+              console.log(`🧹 Cleaned up exception file: ${file.filename}`);
+            } catch (cleanupError) {
+              console.warn(`⚠️ Failed to clean up exception file: ${cleanupError.message}`);
+            }
             console.warn(`⚠️ Skipping ${key} upload due to exception, continuing with other assets`);
           }
         } else {
@@ -1349,7 +1374,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       // Move the uploaded file to the new name
       fs.renameSync(configFile.path, newConfigPath);
       configUrl = `/configs/${name}.json`;
-      console.log(`Config saved as: ${configUrl}`);
+      console.log(`Config saved locally as: ${configUrl}`);
     }
 
     const newModel = new Model({
@@ -1466,10 +1491,28 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
     if (req.files) {
       Object.values(req.files).forEach(arr => {
         arr.forEach(fileObj => {
-          const filePath = path.join(__dirname, '../Frontend/public/models', fileObj.filename);
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-            console.log(`Deleted file due to error: ${fileObj.filename}`);
+          // Try to clean up from both temp multer path and final destination
+          const tempPath = fileObj.path;
+          const finalPath = path.join(__dirname, '../Frontend/public/models', fileObj.filename);
+
+          // Clean up temp file
+          if (fs.existsSync(tempPath)) {
+            try {
+              fs.unlinkSync(tempPath);
+              console.log(`🧹 Cleaned up temp file due to error: ${fileObj.filename}`);
+            } catch (e) {
+              console.warn(`⚠️ Failed to clean up temp file: ${e.message}`);
+            }
+          }
+
+          // Clean up final file if it exists
+          if (fs.existsSync(finalPath)) {
+            try {
+              fs.unlinkSync(finalPath);
+              console.log(`🧹 Cleaned up final file due to error: ${fileObj.filename}`);
+            } catch (e) {
+              console.warn(`⚠️ Failed to clean up final file: ${e.message}`);
+            }
           }
         });
       });
@@ -2376,21 +2419,29 @@ const uploadConfig = multer({
 });
 
 // Upload config JSON
-app.post('/api/upload-config', authMiddleware, requireModelManager, uploadConfig.single('file'), async (req, res) => {
+app.post('/api/upload-config', authMiddleware, requireModelManager, async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ message: 'No config file uploaded' });
+    const { config } = req.body;
+    if (!config) {
+      return res.status(400).json({ message: 'No config data provided' });
     }
 
-    const filePath = `/configs/${req.file.filename}`;
-    console.log(`Config uploaded: ${filePath}`);
-    res.status(200).json({ message: 'Config uploaded successfully', path: filePath, filename: req.file.filename });
+    // Generate filename
+    const filename = `config-${Date.now()}-${Math.round(Math.random() * 1E9)}.json`;
+    const filePath = path.join(__dirname, '../Frontend/public/configs', filename);
+
+    // Write config to file
+    fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf8');
+
+    const publicPath = `/configs/${filename}`;
+    console.log(`Config saved locally: ${publicPath}`);
+    res.status(200).json({
+      message: 'Config uploaded successfully',
+      path: publicPath,
+      filename: filename
+    });
   } catch (error) {
     console.error('Config upload error:', error);
-    if (req.file) {
-      const fileToDelete = path.join(__dirname, '../Frontend/public/configs', req.file.filename);
-      if (fs.existsSync(fileToDelete)) fs.unlinkSync(fileToDelete);
-    }
     res.status(500).json({ message: 'Error uploading config', error: error.message });
   }
 });
