@@ -2230,6 +2230,44 @@ app.delete("/api/configs/:id", authMiddleware, async (req, res) => {
 // Serve configuration texture files
 app.use('/config-textures', express.static(path.join(__dirname, '../Frontend/public/config-textures')));
 
+// Proxy S3 images to avoid CORS issues
+app.get('/api/proxy-image', async (req, res) => {
+  try {
+    const imageUrl = req.query.url;
+    if (!imageUrl) {
+      return res.status(400).json({ error: 'Image URL required' });
+    }
+
+    // Only allow S3 URLs for security
+    if (!imageUrl.includes('amazonaws.com') && !imageUrl.includes('s3.')) {
+      return res.status(403).json({ error: 'Only S3 URLs allowed' });
+    }
+
+    console.log(`🖼️ Proxying image: ${imageUrl}`);
+
+    // Fetch the image from S3
+    const axios = require('axios');
+    const response = await axios.get(imageUrl, {
+      responseType: 'stream',
+      timeout: 10000,
+      headers: {
+        'User-Agent': '3D-Configurator/1.0'
+      }
+    });
+
+    // Set appropriate headers
+    res.setHeader('Content-Type', response.headers['content-type'] || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+
+    // Pipe the image data to the response
+    response.data.pipe(res);
+
+  } catch (error) {
+    console.error('❌ Image proxy error:', error.message);
+    res.status(500).json({ error: 'Failed to fetch image' });
+  }
+});
+
 // Public model endpoint (no authentication required)
 app.get('/api/public/model/:id', async (req, res) => {
   try {
