@@ -144,8 +144,45 @@ app.use('/models', express.static(path.join(__dirname, '../Frontend/public/model
 // Serve textures statically from backend
 app.use('/textures', express.static(path.join(__dirname, '../Frontend/public/textures')));
 app.use('/texture', express.static(path.join(__dirname, '../Frontend/public/texture')));
-// Serve thumbnails statically from backend
-app.use('/thumbnails', express.static(path.join(__dirname, '../Frontend/public/thumbnails')));
+// Proxy S3 thumbnails to avoid CORS issues
+app.get('/thumbnails/:filename(*)', async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    console.log(`🖼️ Proxying thumbnail: ${filename}`);
+
+    // If it's a full S3 URL, proxy it
+    if (filename.startsWith('http://') || filename.startsWith('https://')) {
+      const axios = require('axios');
+      const response = await axios.get(filename, {
+        responseType: 'stream',
+        timeout: 10000,
+        headers: {
+          'User-Agent': '3D-Configurator/1.0'
+        }
+      });
+
+      // Set appropriate headers
+      res.setHeader('Content-Type', response.headers['content-type'] || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+
+      // Pipe the image data to the response
+      response.data.pipe(res);
+    } else {
+      // For local thumbnails (fallback)
+      const localPath = path.join(__dirname, '../Frontend/public/thumbnails', filename);
+      if (fs.existsSync(localPath)) {
+        res.sendFile(localPath);
+      } else {
+        // Return placeholder if thumbnail doesn't exist
+        res.sendFile(path.join(__dirname, '../Frontend/public/placeholder-3d.svg'));
+      }
+    }
+  } catch (error) {
+    console.error('❌ Thumbnail proxy error:', error.message);
+    // Return placeholder on error
+    res.sendFile(path.join(__dirname, '../Frontend/public/placeholder-3d.svg'));
+  }
+});
 // Serve developer-provided JSON configs
 app.use('/configs', express.static(path.join(__dirname, '../Frontend/public/configs')));
 
@@ -155,8 +192,8 @@ app.use('/api/configs', require('./routes/config'));
 // Model proxy route for CORS bypass
 app.use('/api/models/proxy', require('./routes/modelProxy'));
 
-// Model proxy routes for GLB files (bypasses CORS)
-app.use('/api/models/proxy', require('./routes/modelProxy'));
+// Model proxy routes for GLB files and thumbnails (bypasses CORS)
+app.use('/api/proxy', require('./routes/modelProxy'));
 
 // Admin dashboard routes with permission-based access
 app.use('/api/admin-dashboard', require('./routes/adminDashboard'));
@@ -1158,6 +1195,8 @@ app.get("/api/models", async (req, res) => {
         presets: model.presets || undefined,
         // Include preset images for the frontend
         presetImages: model.presetImages || [],
+        // Include thumbnail for the frontend
+        thumbnail: model.thumbnail || undefined,
         // Expose admin-defined placement/transform so the viewer can apply it
         placementMode: model.placementMode || 'autofit',
         modelPosition: Array.isArray(model.modelPosition) ? model.modelPosition : undefined,
@@ -1250,13 +1289,17 @@ app.get("/api/admin/models", authMiddleware, requireModelManager, async (req, re
     }
     const models = await query.lean();
 
-    // Ensure presetImages are included in the response
-    const modelsWithPresetImages = models.map(model => ({
-      ...model,
-      presetImages: model.presetImages || []
-    }));
+    // Ensure presetImages and thumbnails are included in the response
+    const modelsWithAssets = models.map(model => {
+      console.log(`Model ${model.name}: thumbnail = ${model.thumbnail}`);
+      return {
+        ...model,
+        presetImages: model.presetImages || [],
+        thumbnail: model.thumbnail || null
+      };
+    });
 
-    res.json(modelsWithPresetImages);
+    res.json(modelsWithAssets);
   } catch (error) {
     console.error("Get models error:", error, error.stack);
     res.status(500).json({ message: "Error fetching models", error: error.message });
@@ -1271,6 +1314,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
   { name: 'drawers', maxCount: 1 },
   { name: 'glassDoors', maxCount: 1 },
   { name: 'other', maxCount: 1 },
+  { name: 'thumbnail', maxCount: 1 },
   { name: 'config', maxCount: 1 }
 ]), async (req, res) => {
   try {
@@ -1377,6 +1421,57 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       console.log(`Config saved locally as: ${configUrl}`);
     }
 
+    // Handle uploaded thumbnail file
+    let thumbnailUrl = null;
+    if (req.files && req.files.thumbnail && req.files.thumbnail[0]) {
+      try {
+        console.log('Processing thumbnail upload...');
+        const thumbnailFile = req.files.thumbnail[0];
+        console.log(`Thumbnail file: ${thumbnailFile.path} (${(thumbnailFile.size / 1024).toFixed(2)} KB)`);
+
+        // Upload thumbnail to S3
+        const thumbnailS3Key = generateS3Key('thumbnails', `${name}_thumbnail${path.extname(thumbnailFile.originalname)}`);
+        const thumbnailUploadResult = await uploadToS3(thumbnailFile.path, thumbnailS3Key);
+
+        if (thumbnailUploadResult.success) {
+          thumbnailUrl = thumbnailUploadResult.url;
+          console.log(`✅ Thumbnail uploaded to S3: ${thumbnailUploadResult.url}`);
+
+          // Clean up local thumbnail file after successful S3 upload
+          try {
+            fs.unlinkSync(thumbnailFile.path);
+            console.log(`🧹 Cleaned up local thumbnail file: ${thumbnailFile.filename}`);
+          } catch (cleanupError) {
+            console.warn(`⚠️ Failed to clean up local thumbnail file: ${cleanupError.message}`);
+          }
+        } else {
+          console.error(`❌ Failed to upload thumbnail:`, thumbnailUploadResult.error);
+          // Clean up local thumbnail file on upload failure
+          try {
+            fs.unlinkSync(thumbnailFile.path);
+            console.log(`🧹 Cleaned up failed thumbnail upload file: ${thumbnailFile.filename}`);
+          } catch (cleanupError) {
+            console.warn(`⚠️ Failed to clean up failed thumbnail file: ${cleanupError.message}`);
+          }
+          console.warn(`⚠️ Skipping thumbnail upload due to error, continuing with model creation`);
+        }
+      } catch (thumbnailError) {
+        console.error(`❌ Exception during thumbnail upload:`, thumbnailError.message);
+        // Clean up local thumbnail file on exception
+        try {
+          if (req.files.thumbnail[0]) {
+            fs.unlinkSync(req.files.thumbnail[0].path);
+            console.log(`🧹 Cleaned up exception thumbnail file: ${req.files.thumbnail[0].filename}`);
+          }
+        } catch (cleanupError) {
+          console.warn(`⚠️ Failed to clean up exception thumbnail file: ${cleanupError.message}`);
+        }
+        console.warn(`⚠️ Skipping thumbnail upload due to exception, continuing with model creation`);
+      }
+    } else {
+      console.log('⏭️ No thumbnail file provided, skipping');
+    }
+
     const newModel = new Model({
       name,
       displayName,
@@ -1389,6 +1484,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       metadata: parsedMetadata,
       uploadedBy: req.user._id,
       configUrl: configUrl,
+      thumbnail: thumbnailUrl || req.body.thumbnail, // Store thumbnail URL from either upload or config
       section: req.body.section || 'Upright Counter'
     });
 
@@ -1401,6 +1497,9 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
     });
 
     await newModel.save();
+    console.log('✅ Model saved with thumbnail:', newModel.thumbnail);
+    console.log('📄 Full saved model:', { name: newModel.name, thumbnail: newModel.thumbnail, _id: newModel._id });
+    console.log('📥 Received req.body.thumbnail:', req.body.thumbnail);
     await newModel.populate('uploadedBy', 'name email');
 
     // Thumbnail generation removed
@@ -1487,6 +1586,7 @@ app.post("/api/admin/models/upload", authMiddleware, requireModelUploadPerm, upl
       message: "Model uploaded successfully",
       model: newModel,
       configUrl,
+      thumbnailUrl,
       assetUrls: assetUrls,
       uploadedAssets: Object.keys(assets),
       failedAssets: Object.keys(req.files || {}).filter(key => !assets[key] && req.files[key] && req.files[key][0])
@@ -1826,6 +1926,10 @@ app.put("/api/admin/models/:id", authMiddleware, requireModelEditPerm, async (re
   if (assets !== undefined) updateData.assets = assets; // Add assets field
   if (typeof section === 'string') updateData.section = section;
   if (presetImages !== undefined) updateData.presetImages = presetImages; // Add preset images field
+  if (typeof req.body.thumbnail === 'string') {
+    updateData.thumbnail = req.body.thumbnail; // Add thumbnail field
+    console.log('🔄 Updating model with thumbnail:', req.body.thumbnail);
+  }
   // Allow updating file via either file or path (use filename only)
   if (typeof file === 'string') updateData.file = file.split('/').pop();
   if (typeof filePath === 'string') updateData.file = filePath.split('/').pop();
@@ -2369,6 +2473,7 @@ app.get('/api/embed/resolve', async (req, res) => {
       assets: model.assets || {},
       metadata: model.metadata || {},
       presetImages: model.presetImages || [],
+      thumbnail: model.thumbnail || undefined,
       readOnly: true
     };
     return res.json({ success: true, model: payload });
