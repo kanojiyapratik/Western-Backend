@@ -1663,6 +1663,54 @@ res.status(500).json({ message: "Error uploading file", error: error.message });
 }
 });
 
+// Delete a previously uploaded file from S3 by URL or key (used by UI Clear button)
+app.post('/api/upload/delete', authMiddleware, requireModelUploadPerm, async (req, res) => {
+  try {
+    const { url, key } = req.body || {};
+    let s3Key = key || '';
+
+    const extractKeyFromUrl = (u) => {
+      try {
+        if (!u || typeof u !== 'string') return '';
+        if (!u.includes('amazonaws.com')) return '';
+        // Expected formats:
+        // 1) https://<bucket>.s3.<region>.amazonaws.com/folder/file.glb
+        // 2) https://s3.<region>.amazonaws.com/<bucket>/folder/file.glb
+        const urlObj = new URL(u);
+        const host = urlObj.host;
+        const pathname = urlObj.pathname.replace(/^\//, '');
+        if (/\.s3\./.test(host)) {
+          return pathname;
+        }
+        const parts = pathname.split('/');
+        if (parts.length > 1) {
+          return parts.slice(1).join('/');
+        }
+        return '';
+      } catch (e) {
+        return '';
+      }
+    };
+
+    if (!s3Key && url) {
+      s3Key = extractKeyFromUrl(url);
+    }
+
+    if (!s3Key) {
+      return res.status(400).json({ message: 'Missing S3 key or deletable URL' });
+    }
+
+    const result = await deleteFromS3(s3Key);
+    if (!result.success) {
+      return res.status(500).json({ message: 'Failed to delete from S3', error: result.error });
+    }
+    return res.json({ message: 'Deleted from S3', key: s3Key });
+  } catch (err) {
+    console.error('Clear upload delete error:', err);
+    return res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
 // Upload texture file to S3
 app.post("/api/admin/textures/upload", authMiddleware, requireModelUploadPerm, uploadTexture.single('textureFile'), async (req, res) => {
   try {
