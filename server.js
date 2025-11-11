@@ -197,6 +197,8 @@ app.use('/api/proxy', require('./routes/modelProxy'));
 
 // Admin dashboard routes with permission-based access
 app.use('/api/admin-dashboard', require('./routes/adminDashboard'));
+// Permission requests routes
+app.use('/api/permission-requests', require('./routes/permissionRequests'));
 
 // Connect to MongoDB
 const MONGODB_URI = process.env.MONGO_URI || "mongodb://localhost:27017/3dconfigurator";
