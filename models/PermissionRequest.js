@@ -22,7 +22,7 @@ const permissionRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'resolved'],
+    enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
   },
   requestedBy: {

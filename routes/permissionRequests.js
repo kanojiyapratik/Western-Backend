@@ -9,7 +9,7 @@ const { sendEmbedEmail } = require("../utils/mailer");
 // Get all permission requests for admin/superadmin
 router.get("/admin", authMiddleware(["admin", "superadmin"]), async (req, res) => {
   try {
-    const { status = "pending" } = req.query;
+    const { status = "all" } = req.query;
 
     const filter = {};
     if (status && status !== 'all') {
@@ -163,25 +163,56 @@ router.post("/", authMiddleware(["admin", "user"]), async (req, res) => {
 // Mark a permission request as resolved
 router.put("/:requestId/resolve", authMiddleware(["admin", "superadmin"]), async (req, res) => {
   try {
-    console.log('=== ULTRA SIMPLE RESOLVE ===');
-    console.log('Request ID:', req.params.requestId);
-    console.log('Admin User:', req.user.email);
+    const { requestId } = req.params;
+    const { status, adminResponse = '' } = req.body;
     
-    // Ultra minimal - just return success without any database operations
-    console.log('=== SUCCESS - NO DATABASE OPERATIONS ===');
-    res.json({
-      message: "Request resolved successfully",
-      requestId: req.params.requestId,
+    // Validate status
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ message: "Status must be 'approved' or 'rejected'" });
+    }
+    
+    // Find and update the request
+    const permissionRequest = await PermissionRequest.findById(requestId);
+    if (!permissionRequest) {
+      return res.status(404).json({ message: "Request not found" });
+    }
+    
+    // Update the request to the specific decision
+    permissionRequest.status = status; // 'approved' | 'rejected'
+    permissionRequest.adminResponse = adminResponse;
+    permissionRequest.respondedBy = req.user._id;
+    permissionRequest.respondedAt = new Date();
+
+    // Try saving; if the schema still has legacy enum (pending/resolved), fall back gracefully
+    try {
+      await permissionRequest.save();
+    } catch (saveErr) {
+      if (saveErr && saveErr.name === 'ValidationError' && saveErr.errors && saveErr.errors.status) {
+        console.warn('PermissionRequest status enum mismatch, falling back to legacy "resolved"');
+        permissionRequest.status = 'resolved';
+        await permissionRequest.save();
+      } else {
+        throw saveErr;
+      }
+    }
+
+    console.log('Request resolved:', {
+      requestId,
+      status,
       adminUser: req.user.email,
-      timestamp: new Date().toISOString(),
-      simpleMode: true
+      timestamp: new Date().toISOString()
+    });
+
+    res.json({
+      message: `Request ${status} successfully`,
+      requestId,
+      status,
+      adminUser: req.user.email,
+      timestamp: new Date().toISOString()
     });
     
   } catch (error) {
-    console.error('=== ULTRA SIMPLE ERROR ===');
-    console.error('Error details:', error);
-    
-    // Return the most basic error response
+    console.error('Error resolving request:', error);
     res.status(500).json({
       message: "Error resolving request",
       error: error.message,
@@ -222,6 +253,42 @@ router.get("/test", authMiddleware(["admin", "superadmin"]), async (req, res) =>
     res.status(500).json({ message: "Test endpoint error", error: error.message });
   }
 });
+// Delete a permission request
+router.delete("/:requestId", authMiddleware(["admin", "user"]), async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const token = req.headers.authorization?.replace('Bearer ', '');
+
+    // Get the request to verify ownership
+    const request = await PermissionRequest.findById(requestId);
+    if (!request) {
+      return res.status(404).json({ message: "Request not found" });
+    }
+
+    // Check if user owns this request or is admin/superadmin
+    const isOwner = request.requesterId.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'superadmin';
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ message: "You can only delete your own requests" });
+    }
+
+    // Check if request is already resolved
+    if (request.status === 'resolved') {
+      return res.status(400).json({ message: "Cannot delete resolved requests" });
+    }
+
+    // Delete the request
+    await PermissionRequest.findByIdAndDelete(requestId);
+
+    res.json({ message: "Request deleted successfully" });
+  } catch (error) {
+    console.error('Error deleting permission request:', error);
+    res.status(500).json({ message: "Error deleting request", error: error.message });
+  }
+});
+
+module.exports = router;
 
 // Debug specific request
 router.get("/debug/:requestId", authMiddleware(["admin", "superadmin"]), async (req, res) => {
