@@ -171,34 +171,49 @@ router.put("/:requestId/resolve", authMiddleware(["admin", "superadmin"]), async
       return res.status(400).json({ message: "Status must be 'approved' or 'rejected'" });
     }
     
-    // Find and update the request
-    const permissionRequest = await PermissionRequest.findById(requestId);
-    if (!permissionRequest) {
-      return res.status(404).json({ message: "Request not found" });
+    // Validate requestId
+    if (!mongoose.Types.ObjectId.isValid(requestId)) {
+      return res.status(400).json({ message: "Invalid request ID" });
     }
     
-    // Update the request to the specific decision
-    permissionRequest.status = status; // 'approved' | 'rejected'
-    permissionRequest.adminResponse = adminResponse;
-    permissionRequest.respondedBy = req.user._id;
-    permissionRequest.respondedAt = new Date();
-
-    // Try saving; if the schema still has legacy enum (pending/resolved), fall back gracefully
-    try {
-      await permissionRequest.save();
-    } catch (saveErr) {
-      if (saveErr && saveErr.name === 'ValidationError' && saveErr.errors && saveErr.errors.status) {
-        console.warn('PermissionRequest status enum mismatch, falling back to legacy "resolved"');
-        permissionRequest.status = 'resolved';
-        await permissionRequest.save();
+    console.log(`🔧 Attempting to resolve request ${requestId} with status: ${status}`);
+    
+    // Find and update the request using findOneAndUpdate for more reliability
+    const updateData = {
+      status: status, // 'approved' | 'rejected'
+      adminResponse: adminResponse,
+      respondedBy: req.user._id,
+      respondedAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    // Use findOneAndUpdate with upsert: false to be safer
+    const permissionRequest = await PermissionRequest.findOneAndUpdate(
+      { _id: requestId, status: 'pending' }, // Only update if still pending
+      updateData,
+      {
+        new: true, // Return the updated document
+        runValidators: true
+      }
+    );
+    
+    if (!permissionRequest) {
+      // Check if request exists but was already processed
+      const existingRequest = await PermissionRequest.findById(requestId);
+      if (!existingRequest) {
+        return res.status(404).json({ message: "Request not found" });
       } else {
-        throw saveErr;
+        return res.status(400).json({
+          message: "Request has already been processed",
+          currentStatus: existingRequest.status
+        });
       }
     }
 
-    console.log('Request resolved:', {
+    console.log('✅ Request resolved successfully:', {
       requestId,
-      status,
+      originalStatus: 'pending',
+      newStatus: status,
       adminUser: req.user.email,
       timestamp: new Date().toISOString()
     });
@@ -212,12 +227,21 @@ router.put("/:requestId/resolve", authMiddleware(["admin", "superadmin"]), async
     });
     
   } catch (error) {
-    console.error('Error resolving request:', error);
-    res.status(500).json({
+    console.error('❌ Error resolving request:', error);
+    
+    // Provide more detailed error information
+    const errorResponse = {
       message: "Error resolving request",
       error: error.message,
       timestamp: new Date().toISOString()
-    });
+    };
+    
+    // Include stack trace for debugging in development
+    if (process.env.NODE_ENV !== 'production') {
+      errorResponse.details = error.stack;
+    }
+    
+    res.status(500).json(errorResponse);
   }
 });
 
@@ -287,8 +311,6 @@ router.delete("/:requestId", authMiddleware(["admin", "user"]), async (req, res)
     res.status(500).json({ message: "Error deleting request", error: error.message });
   }
 });
-
-module.exports = router;
 
 // Debug specific request
 router.get("/debug/:requestId", authMiddleware(["admin", "superadmin"]), async (req, res) => {
